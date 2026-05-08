@@ -1,0 +1,5 @@
+include:
+  - local: ".gitlab/ci/common.yml"
+  - local: ".gitlab/ci/detect.yml"
+  - local: ".gitlab/ci/python.yml"
+  - local: ".gitlab/ci/node.yml"

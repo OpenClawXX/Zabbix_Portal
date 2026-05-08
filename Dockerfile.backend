@@ -1,3 +1,6 @@
+# Change to Artifactory mirror:
+# FROM artifactory.example.local/docker-virtual/python:3.12-slim
+# Package/image preference: python 3.12-slim, pip 24.3.x
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -6,6 +9,8 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 COPY requirements.txt .
+# Python dependencies should be resolved through Artifactory PyPI proxy:
+# PIP_INDEX_URL=https://artifactory.example.local/api/pypi/pypi/simple
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .

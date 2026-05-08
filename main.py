@@ -175,4 +175,4 @@ def add_trigger(data: TriggerRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="localhost", port=6769)
+    uvicorn.run(app, host="0.0.0.0", port=6769)

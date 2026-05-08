@@ -1,0 +1,68 @@
+detect_changed_languages:
+  stage: verify
+  # Change to Artifactory mirror for Alpine base image:
+  # image: "artifactory.example.local/docker-virtual/alpine:3.20"
+  image: alpine:3.20
+  before_script:
+    # Packages pulled from Alpine repositories (mirror these in Artifactory remote):
+    # - git (prefer 2.45.x on alpine 3.20)
+    # - bash (prefer 5.2.x on alpine 3.20)
+    - apk add --no-cache git bash
+    - |
+      if [ -n "$CI_MERGE_REQUEST_TARGET_BRANCH_SHA" ]; then
+        BASE_SHA="$CI_MERGE_REQUEST_TARGET_BRANCH_SHA"
+      elif [ -n "$CI_COMMIT_BEFORE_SHA" ] && [ "$CI_COMMIT_BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+        BASE_SHA="$CI_COMMIT_BEFORE_SHA"
+      else
+        BASE_SHA="$(git rev-list --max-parents=0 "$CI_COMMIT_SHA" | tail -n 1)"
+      fi
+      echo "BASE_SHA=$BASE_SHA" >> detection.env
+  script:
+    - |
+      CHANGED_FILES="$(git diff --name-only "$BASE_SHA" "$CI_COMMIT_SHA")"
+      printf "%s\n" "$CHANGED_FILES" > changed_files.txt
+
+      PYTHON_FILES="$(printf "%s\n" "$CHANGED_FILES" | awk '/\.py$|^requirements\.txt$|^Dockerfile\.backend$|^\.gitlab\/ci\/python\.yml$|^\.gitlab\/ci\/common\.yml$|^\.gitlab-ci\.yml$/')"
+      NODE_FILES="$(printf "%s\n" "$CHANGED_FILES" | awk '/^frontend\/|^\.gitlab\/ci\/node\.yml$|^\.gitlab\/ci\/common\.yml$|^\.gitlab-ci\.yml$|package\.json$|package-lock\.json$|yarn\.lock$|pnpm-lock\.yaml$/')"
+
+      if [ -n "$PYTHON_FILES" ]; then
+        echo "PYTHON_CHANGED=true" >> detection.env
+      else
+        echo "PYTHON_CHANGED=false" >> detection.env
+      fi
+
+      if [ -n "$NODE_FILES" ]; then
+        echo "NODE_CHANGED=true" >> detection.env
+      else
+        echo "NODE_CHANGED=false" >> detection.env
+      fi
+
+      {
+        echo "Changed files:"
+        printf "%s\n" "$CHANGED_FILES"
+        echo
+        echo "Python-interpreted files:"
+        if [ -n "$PYTHON_FILES" ]; then printf "%s\n" "$PYTHON_FILES"; else echo "(none)"; fi
+        echo
+        echo "Node-interpreted files:"
+        if [ -n "$NODE_FILES" ]; then printf "%s\n" "$NODE_FILES"; else echo "(none)"; fi
+      } > language_detection_report.txt
+  artifacts:
+    reports:
+      dotenv: detection.env
+    paths:
+      - changed_files.txt
+      - language_detection_report.txt
+    expire_in: 1 week
+
+no_relevant_changes_notice:
+  stage: verify
+  image: alpine:3.20
+  needs: ["detect_changed_languages"]
+  script:
+    - |
+      if [ "$PYTHON_CHANGED" = "false" ] && [ "$NODE_CHANGED" = "false" ]; then
+        echo "No Python or Node relevant changes detected. Verify/build/publish jobs are intentionally skipped."
+      else
+        echo "Relevant changes detected; language-specific jobs will run."
+      fi

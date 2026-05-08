@@ -73,7 +73,7 @@ Frontend host/port is configured in:
 
 Example:
 
-- `host: 'localhost'`
+- `host: '0.0.0.0'`
 - `port: 42069`
 
 ## API Endpoints
@@ -129,6 +129,9 @@ docker build -f frontend/Dockerfile -t zabb-frontend ./frontend
 
 - Restart dev servers after config changes (`vite.config.ts`, backend host/port, etc.).
 - Keep credentials/secrets in `.env` and do not commit them.
+- Release policy:
+  - `develop` branch publishes `:staging` images
+  - `main` branch and tags allow manual production publish (`:latest`, commit SHA, and tag image when tagged)
 - Ignore files are set up in:
   - `.gitignore`
   - `.dockerignore`
