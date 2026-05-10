@@ -12,7 +12,7 @@ variables:
   # - docker-virtual/node:22
   # - docker-virtual/docker:27
   PYTHON_IMAGE: "python:3.12-slim"
-  NODE_IMAGE: "node:22"
+  NODE_IMAGE: "node:20"
   # Set these in GitLab CI/CD variables for private-network package resolution.
   # Example values:
   # - PIP_INDEX_URL=https://artifactory.example.local/api/pypi/pypi/simple

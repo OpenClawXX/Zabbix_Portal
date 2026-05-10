@@ -1,7 +1,7 @@
 # Change to Artifactory mirror:
 # FROM artifactory.example.local/docker-virtual/node:22-alpine AS build
 # Package/image preference: node 22-alpine, npm 10.9.x
-FROM node:22-alpine AS build
+FROM node:20-alpine AS build
 
 WORKDIR /app
 
