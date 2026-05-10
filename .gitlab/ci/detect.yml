@@ -22,8 +22,8 @@ detect_changed_languages:
       CHANGED_FILES="$(git diff --name-only "$BASE_SHA" "$CI_COMMIT_SHA")"
       printf "%s\n" "$CHANGED_FILES" > changed_files.txt
 
-      PYTHON_FILES="$(printf "%s\n" "$CHANGED_FILES" | awk '/\.py$|^requirements\.txt$|^Dockerfile\.backend$|^\.gitlab\/ci\/python\.yml$|^\.gitlab\/ci\/common\.yml$|^\.gitlab-ci\.yml$/')"
-      NODE_FILES="$(printf "%s\n" "$CHANGED_FILES" | awk '/^frontend\/|^\.gitlab\/ci\/node\.yml$|^\.gitlab\/ci\/common\.yml$|^\.gitlab-ci\.yml$|package\.json$|package-lock\.json$|yarn\.lock$|pnpm-lock\.yaml$/')"
+      PYTHON_FILES="$(printf "%s\n" "$CHANGED_FILES" | awk '/\.py$|^requirements\.txt$|^Dockerfile\.backend$|^\.gitlab\/ci\/python\.yml$|^\.gitlab\/ci\/common\.yml$|^\.gitlab\/ci\/gitops\.yml$|^\.gitlab-ci\.yml$/')"
+      NODE_FILES="$(printf "%s\n" "$CHANGED_FILES" | awk '/^frontend\/|^\.gitlab\/ci\/node\.yml$|^\.gitlab\/ci\/common\.yml$|^\.gitlab\/ci\/gitops\.yml$|^\.gitlab-ci\.yml$|package\.json$|package-lock\.json$|yarn\.lock$|pnpm-lock\.yaml$/')"
 
       if [ -n "$PYTHON_FILES" ]; then
         echo "PYTHON_CHANGED=true" >> detection.env
@@ -62,7 +62,7 @@ no_relevant_changes_notice:
   script:
     - |
       if [ "$PYTHON_CHANGED" = "false" ] && [ "$NODE_CHANGED" = "false" ]; then
-        echo "No Python or Node relevant changes detected. Verify/build/publish jobs are intentionally skipped."
+        echo "No Python or Node relevant changes detected. Verify/build/deploy jobs are intentionally skipped."
       else
         echo "Relevant changes detected; language-specific jobs will run."
       fi

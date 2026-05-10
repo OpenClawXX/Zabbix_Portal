@@ -1,0 +1,153 @@
+# Multi-project triggers into your GitOps repo (verify → build → staging → prod → dr → cleanup there).
+# Downstream project paths (CI/CD variables):
+#   HELM_CHART_CI_PROJECT_PATH, ARGO_APPS_CI_PROJECT_PATH
+# Optional branch overrides: HELM_CHART_TARGET_BRANCH, ARGO_APPS_TARGET_BRANCH (default $CI_COMMIT_REF_NAME)
+#
+# Each trigger passes UPSTREAM_DEPLOY_PHASE: staging | prod | dr for the child pipeline to branch on.
+
+.gitops_upstream_vars:
+  variables:
+    UPSTREAM_CI_PROJECT_PATH: $CI_PROJECT_PATH
+    UPSTREAM_CI_PROJECT_URL: $CI_PROJECT_URL
+    UPSTREAM_CI_COMMIT_SHA: $CI_COMMIT_SHA
+    UPSTREAM_CI_COMMIT_SHORT_SHA: $CI_COMMIT_SHORT_SHA
+    UPSTREAM_CI_COMMIT_REF_NAME: $CI_COMMIT_REF_NAME
+    UPSTREAM_CI_COMMIT_BRANCH: $CI_COMMIT_BRANCH
+    UPSTREAM_CI_COMMIT_TAG: $CI_COMMIT_TAG
+
+.gitops_needs:
+  needs:
+    - job: detect_changed_languages
+    - job: build_backend_image
+      optional: true
+    - job: build_frontend_image
+      optional: true
+
+.gitops_rules_helm_staging:
+  rules:
+    - if: '$HELM_CHART_CI_PROJECT_PATH && $CI_COMMIT_BRANCH == "develop" && ($PYTHON_CHANGED == "true" || $NODE_CHANGED == "true")'
+      when: on_success
+    - when: never
+
+.gitops_rules_argo_staging:
+  rules:
+    - if: '$ARGO_APPS_CI_PROJECT_PATH && $CI_COMMIT_BRANCH == "develop" && ($PYTHON_CHANGED == "true" || $NODE_CHANGED == "true")'
+      when: on_success
+    - when: never
+
+.gitops_rules_helm_prod:
+  rules:
+    - if: '$HELM_CHART_CI_PROJECT_PATH && $CI_COMMIT_BRANCH == "main" && ($PYTHON_CHANGED == "true" || $NODE_CHANGED == "true")'
+      when: manual
+    - if: '$HELM_CHART_CI_PROJECT_PATH && $CI_COMMIT_TAG && ($PYTHON_CHANGED == "true" || $NODE_CHANGED == "true")'
+      when: manual
+    - when: never
+
+.gitops_rules_argo_prod:
+  rules:
+    - if: '$ARGO_APPS_CI_PROJECT_PATH && $CI_COMMIT_BRANCH == "main" && ($PYTHON_CHANGED == "true" || $NODE_CHANGED == "true")'
+      when: manual
+    - if: '$ARGO_APPS_CI_PROJECT_PATH && $CI_COMMIT_TAG && ($PYTHON_CHANGED == "true" || $NODE_CHANGED == "true")'
+      when: manual
+    - when: never
+
+# DR: adjust the branch name to match how you trigger OpenShift DR (manual).
+.gitops_rules_helm_dr:
+  rules:
+    - if: '$HELM_CHART_CI_PROJECT_PATH && $CI_COMMIT_BRANCH == "dr" && ($PYTHON_CHANGED == "true" || $NODE_CHANGED == "true")'
+      when: manual
+    - when: never
+
+.gitops_rules_argo_dr:
+  rules:
+    - if: '$ARGO_APPS_CI_PROJECT_PATH && $CI_COMMIT_BRANCH == "dr" && ($PYTHON_CHANGED == "true" || $NODE_CHANGED == "true")'
+      when: manual
+    - when: never
+
+trigger_helm_repo_staging:
+  extends:
+    - .gitops_upstream_vars
+    - .gitops_needs
+  stage: staging
+  variables:
+    UPSTREAM_DEPLOY_PHASE: staging
+  rules: !reference [.gitops_rules_helm_staging, rules]
+  trigger:
+    project: $HELM_CHART_CI_PROJECT_PATH
+    branch: $HELM_CHART_TARGET_BRANCH
+    strategy: depend
+
+trigger_argo_repo_staging:
+  extends:
+    - .gitops_upstream_vars
+    - .gitops_needs
+  stage: staging
+  variables:
+    UPSTREAM_DEPLOY_PHASE: staging
+  rules: !reference [.gitops_rules_argo_staging, rules]
+  trigger:
+    project: $ARGO_APPS_CI_PROJECT_PATH
+    branch: $ARGO_APPS_TARGET_BRANCH
+    strategy: depend
+
+trigger_helm_repo_prod:
+  extends:
+    - .gitops_upstream_vars
+    - .gitops_needs
+  stage: prod
+  variables:
+    UPSTREAM_DEPLOY_PHASE: prod
+  rules: !reference [.gitops_rules_helm_prod, rules]
+  trigger:
+    project: $HELM_CHART_CI_PROJECT_PATH
+    branch: $HELM_CHART_TARGET_BRANCH
+    strategy: depend
+
+trigger_argo_repo_prod:
+  extends:
+    - .gitops_upstream_vars
+    - .gitops_needs
+  stage: prod
+  variables:
+    UPSTREAM_DEPLOY_PHASE: prod
+  rules: !reference [.gitops_rules_argo_prod, rules]
+  trigger:
+    project: $ARGO_APPS_CI_PROJECT_PATH
+    branch: $ARGO_APPS_TARGET_BRANCH
+    strategy: depend
+
+trigger_helm_repo_dr:
+  extends:
+    - .gitops_upstream_vars
+    - .gitops_needs
+  stage: dr
+  variables:
+    UPSTREAM_DEPLOY_PHASE: dr
+  rules: !reference [.gitops_rules_helm_dr, rules]
+  trigger:
+    project: $HELM_CHART_CI_PROJECT_PATH
+    branch: $HELM_CHART_TARGET_BRANCH
+    strategy: depend
+
+trigger_argo_repo_dr:
+  extends:
+    - .gitops_upstream_vars
+    - .gitops_needs
+  stage: dr
+  variables:
+    UPSTREAM_DEPLOY_PHASE: dr
+  rules: !reference [.gitops_rules_argo_dr, rules]
+  trigger:
+    project: $ARGO_APPS_CI_PROJECT_PATH
+    branch: $ARGO_APPS_TARGET_BRANCH
+    strategy: depend
+
+# Mirrors the cleanup stage in your GitOps repo; extend with scripts if this app pipeline needs teardown.
+cleanup_app_pipeline:
+  stage: cleanup
+  image: alpine:3.20
+  rules:
+    - when: on_success
+  allow_failure: true
+  script:
+    - echo "App pipeline cleanup stage (optional hooks)."

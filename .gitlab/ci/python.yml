@@ -28,62 +28,25 @@ verify_python:
 
 build_backend_image:
   stage: build
-  extends: .docker_job
+  extends: .kaniko_registry_auth
+  image:
+    name: $KANIKO_IMAGE_BACKEND
+    entrypoint: [""]
   needs: ["verify_python", "detect_changed_languages"]
   rules:
     - if: $PYTHON_CHANGED == "true"
       when: on_success
     - when: never
   script:
-    - docker build -f Dockerfile.backend -t "$CI_REGISTRY_IMAGE/backend:$CI_COMMIT_SHORT_SHA" .
-    - docker save "$CI_REGISTRY_IMAGE/backend:$CI_COMMIT_SHORT_SHA" -o backend-image.tar
-  artifacts:
-    paths:
-      - backend-image.tar
-    expire_in: 1 day
-
-publish_staging_backend:
-  stage: staging_publish
-  extends: .docker_job
-  needs:
-    - build_backend_image
-    - detect_changed_languages
-  rules:
-    - if: $CI_COMMIT_BRANCH == "develop" && $PYTHON_CHANGED == "true"
-      when: on_success
-    - when: never
-  script:
-    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
-    - docker load -i backend-image.tar
-    - docker tag "$CI_REGISTRY_IMAGE/backend:$CI_COMMIT_SHORT_SHA" "$CI_REGISTRY_IMAGE/backend:staging"
-    - docker push "$CI_REGISTRY_IMAGE/backend:staging"
-    - docker push "$CI_REGISTRY_IMAGE/backend:$CI_COMMIT_SHORT_SHA"
-
-publish_prod_backend:
-  stage: prod_publish
-  extends: .docker_job
-  needs:
-    - build_backend_image
-    - detect_changed_languages
-  rules:
-    - if: $CI_COMMIT_BRANCH == "main" && $PYTHON_CHANGED == "true"
-      when: manual
-      allow_failure: false
-    - if: $CI_COMMIT_TAG && $PYTHON_CHANGED == "true"
-      when: manual
-      allow_failure: false
-    - when: never
-  script:
-    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
-    - docker load -i backend-image.tar
-    - docker tag "$CI_REGISTRY_IMAGE/backend:$CI_COMMIT_SHORT_SHA" "$CI_REGISTRY_IMAGE/backend:latest"
     - |
-      if [ -n "$CI_COMMIT_TAG" ]; then
-        docker tag "$CI_REGISTRY_IMAGE/backend:$CI_COMMIT_SHORT_SHA" "$CI_REGISTRY_IMAGE/backend:$CI_COMMIT_TAG"
+      DEST="${ARTIFACTORY_DOCKER_REGISTRY}/${ARTIFACTORY_DOCKER_REPO_PATH}/backend:${CI_COMMIT_SHORT_SHA}"
+      EXTRA=""
+      if [ "$KANIKO_SKIP_TLS_VERIFY" = "true" ]; then
+        EXTRA="${EXTRA} --skip-tls-verify"
       fi
-    - docker push "$CI_REGISTRY_IMAGE/backend:$CI_COMMIT_SHORT_SHA"
-    - docker push "$CI_REGISTRY_IMAGE/backend:latest"
-    - |
-      if [ -n "$CI_COMMIT_TAG" ]; then
-        docker push "$CI_REGISTRY_IMAGE/backend:$CI_COMMIT_TAG"
-      fi
+      /kaniko/executor \
+        --context "${CI_PROJECT_DIR}" \
+        --dockerfile "${CI_PROJECT_DIR}/Dockerfile.backend" \
+        --destination "$DEST" \
+        --compressed-caching=false \
+        $EXTRA
