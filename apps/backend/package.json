@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "scripts": {
-    "dev": "uvicorn main:app --host 0.0.0.0 --port 8000 --reload",
+    "dev": "uvicorn main:app --host 0.0.0.0 --port 6769 --reload",
     "build": "echo 'Backend: no build step required'",
     "lint": "ruff check . && ruff format --check .",
     "typecheck": "mypy .",

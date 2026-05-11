@@ -4,7 +4,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from zabbix_utils import ZabbixAPI
 
-class ZabbixBase:
+class Zabbix_Base:
     def __init__(self):
         # Always load the .env that lives next to this file.
         # override=True avoids "stale" machine-level env vars taking precedence.
@@ -21,7 +21,7 @@ class ZabbixBase:
 
         try:
             # zabbix_utils performs login during construction when creds are provided.
-            self.zapi = ZabbixAPI(url=url, user=user, password=password)
+            self.zapi = ZabbixAPI(url=url, user=user, password=password, skip_version_check=True)
             print("Successfully connected to Zabbix API.")
         except Exception as e:
             print(f"Connection failed: {repr(e)}")

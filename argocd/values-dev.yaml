@@ -1,11 +1,12 @@
 # ── Dev environment overrides ─────────────────────────────────────────────────
-# Applied on top of helm/charts/zabbix-portal/values.yaml
+# Applied on top of helm/charts/<project>/values.yaml
 
-zabbix-portal-backend:
+backend:
   replicaCount: 1
 
   image:
-    repository: your-registry/zabbix-portal-backend
+    # PROJECT-SPECIFIC: set to your registry path
+    repository: your-registry/backend
     tag: latest
     pullPolicy: Always    # Always pull in dev to pick up fresh :latest images
 
@@ -15,7 +16,7 @@ zabbix-portal-backend:
     annotations:
       nginx.ingress.kubernetes.io/rewrite-target: /
     hosts:
-      - host: api.dev.zabbix-portal.local
+      - host: api.dev.backend.local
         paths:
           - path: /
             pathType: Prefix
@@ -29,22 +30,23 @@ zabbix-portal-backend:
       cpu: 250m
       memory: 256Mi
 
-  # Enable verbose logging in dev
   config:
     LOG_LEVEL: "DEBUG"
     ENVIRONMENT: "dev"
 
-  # Point at a dev-specific Zabbix instance
-  existingSecret: "zabbix-portal-backend-secret-dev"
+  # PROJECT-SPECIFIC: create before deploying:
+  #   kubectl create secret generic backend-secret-dev --from-literal=... -n <namespace>
+  existingSecret: "backend-secret-dev"
 
   autoscaling:
     enabled: false
 
-zabbix-portal-frontend:
+frontend:
   replicaCount: 1
 
   image:
-    repository: your-registry/zabbix-portal-frontend
+    # PROJECT-SPECIFIC: set to your registry path
+    repository: your-registry/frontend
     tag: latest
     pullPolicy: Always
 
@@ -52,7 +54,7 @@ zabbix-portal-frontend:
     enabled: true
     className: nginx
     hosts:
-      - host: dev.zabbix-portal.local
+      - host: dev.frontend.local
         paths:
           - path: /
             pathType: Prefix

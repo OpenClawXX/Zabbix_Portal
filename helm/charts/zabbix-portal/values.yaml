@@ -1,9 +1,10 @@
-# Umbrella chart values - overrides values from sub-charts.
-# Keys must match the sub-chart name exactly.
+# Umbrella chart values — override sub-chart defaults here.
+# Keys MUST match the sub-chart names declared in Chart.yaml dependencies.
 
-zabbix-portal-backend:
+backend:
   image:
-    repository: your-registry/zabbix-portal-backend
+    # PROJECT-SPECIFIC: set to your registry path, e.g. registry.example.com/my-app/backend
+    repository: your-registry/backend
     tag: latest
     pullPolicy: IfNotPresent
 
@@ -16,7 +17,7 @@ zabbix-portal-backend:
       nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
       nginx.ingress.kubernetes.io/proxy-read-timeout: "90"
     hosts:
-      - host: api.zabbix-portal.local
+      - host: api.backend.local
         paths:
           - path: /
             pathType: Prefix
@@ -30,22 +31,28 @@ zabbix-portal-backend:
       cpu: 500m
       memory: 512Mi
 
-  existingSecret: "zabbix-portal-backend-secret"
+  # PROJECT-SPECIFIC: create this secret before deploying:
+  #   kubectl create secret generic backend-secret \
+  #     --from-literal=ZABBIX_URL=http://... \
+  #     --from-literal=ZABBIX_USER=Admin \
+  #     --from-literal=ZABBIX_PASS=... -n <namespace>
+  existingSecret: "backend-secret"
 
   env:
     ZABBIX_URL: ""
     ZABBIX_USER: ""
 
-zabbix-portal-frontend:
+frontend:
   image:
-    repository: your-registry/zabbix-portal-frontend
+    # PROJECT-SPECIFIC: set to your registry path, e.g. registry.example.com/my-app/frontend
+    repository: your-registry/frontend
     tag: latest
     pullPolicy: IfNotPresent
 
   replicaCount: 1
 
   # apiProxy routes /api/* to the backend service at the Ingress level.
-  # The backend service name is auto-derived as <release-name>-zabbix-portal-backend.
+  # The backend service name is auto-derived as <release-name>-backend.
   # Override backendServiceName only if the backend is deployed separately.
   apiProxy:
     enabled: true
@@ -58,10 +65,9 @@ zabbix-portal-frontend:
     annotations:
       nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
       nginx.ingress.kubernetes.io/proxy-read-timeout: "90"
-      # Strip /api prefix before forwarding to the backend service
       nginx.ingress.kubernetes.io/rewrite-target: /$2
     hosts:
-      - host: zabbix-portal.local
+      - host: frontend.local
         paths:
           - path: /
             pathType: Prefix
@@ -78,17 +84,15 @@ zabbix-portal-frontend:
 filebeat:
   image:
     # PRIVATE NETWORK: replace with your internal Artifactory / Nexus mirror.
-    # e.g. <your-registry>/docker-virtual/docker.elastic.co/beats/filebeat:8.17.0
     # Keep the tag in sync with FILEBEAT_VERSION in .gitlab/ci/common.yml.
     repository: your-registry/filebeat
     tag: latest
     pullPolicy: IfNotPresent
 
   elasticsearch:
-    # PRIVATE NETWORK: set hosts to your internal Elasticsearch cluster.
+    # UPDATE ME: set to your existing Elasticsearch server URL.
     # e.g. https://elasticsearch.internal.example.com:9200
-    # For TLS with a self-signed / internal CA also set ssl.* fields in filebeat.yml.
-    hosts: "elasticsearch:9200"
+    hosts: ""
     username: "elastic"
     existingSecret: "filebeat-elasticsearch-secret"
     secretKey: "ELASTICSEARCH_PASSWORD"

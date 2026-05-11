@@ -1,6 +1,6 @@
 apiVersion: v2
-name: zabbix-portal-backend
-description: Zabbix Portal FastAPI backend
+name: backend
+description: Application backend service
 type: application
 version: 0.1.0
 appVersion: "1.0.0"

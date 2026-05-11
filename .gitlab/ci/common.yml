@@ -38,6 +38,7 @@ variables:
 
   # ── pnpm workspace package names ────────────────────────────────────────────
   # Used by turbo --filter. Must match the "name" field in each app's package.json.
+  # PROJECT-SPECIFIC: update to @<your-project>/backend and @<your-project>/frontend.
   BACKEND_PACKAGE: "@zabbix-portal/backend"
   FRONTEND_PACKAGE: "@zabbix-portal/frontend"
 
@@ -48,23 +49,33 @@ variables:
   ROOT_JS_CONFIGS: "package\\.json|pnpm-workspace\\.yaml|pnpm-lock\\.yaml|turbo\\.json|biome\\.json|\\.npmrc"
 
   # ── Helm ────────────────────────────────────────────────────────────────────
-  HELM_CHART_PATH: helm/charts/zabbix-portal
-  BACKEND_HELM_KEY: zabbix-portal-backend
-  FRONTEND_HELM_KEY: zabbix-portal-frontend
-  FILEBEAT_HELM_KEY: zabbix-portal-filebeat
+  # HELM_CHART_PATH must match the umbrella chart directory name under helm/charts/.
+  # Rename the directory to match PROJECT_NAME when reusing for a new project.
+  HELM_CHART_PATH: "helm/charts/${PROJECT_NAME}"
+  # Sub-chart keys — match the 'name:' field in each sub-chart's Chart.yaml.
+  # These are generic and do not need to change between projects.
+  BACKEND_HELM_KEY: backend
+  FRONTEND_HELM_KEY: frontend
+  FILEBEAT_HELM_KEY: filebeat
 
   # ── Kubernetes ──────────────────────────────────────────────────────────────
-  K8S_NAMESPACE: zabbix-portal
+  K8S_NAMESPACE: "${PROJECT_NAME}"
 
   # ── ArgoCD application names ────────────────────────────────────────────────
-  ARGOCD_APP_STAGING: zabbix-portal-staging
-  ARGOCD_APP_PRODUCTION: zabbix-portal-production
-  ARGOCD_APP_DR: zabbix-portal-dr
+  ARGOCD_APP_STAGING: "${PROJECT_NAME}-staging"
+  ARGOCD_APP_PRODUCTION: "${PROJECT_NAME}-production"
+  ARGOCD_APP_DR: "${PROJECT_NAME}-dr"
+
+  # ── Domain configuration ────────────────────────────────────────────────────
+  # PROJECT-SPECIFIC: set LOCAL_DOMAIN to your internal cluster domain (used for
+  # dev/staging hosts) and PROD_DOMAIN to your public production domain.
+  LOCAL_DOMAIN: "local"
+  PROD_DOMAIN: "example.com"
 
   # ── Environment URLs (used by GitLab environment dashboards) ────────────────
-  STAGING_URL: https://staging.zabbix-portal.example.com
-  PRODUCTION_URL: https://zabbix-portal.example.com
-  DR_URL: https://dr.zabbix-portal.example.com
+  STAGING_URL: "https://staging.${PROJECT_NAME}.${PROD_DOMAIN}"
+  PRODUCTION_URL: "https://${PROJECT_NAME}.${PROD_DOMAIN}"
+  DR_URL: "https://dr.${PROJECT_NAME}.${PROD_DOMAIN}"
 
   # ── Tooling versions ────────────────────────────────────────────────────────
   PNPM_VERSION: "9.15.4"
@@ -73,6 +84,7 @@ variables:
   HELM_VERSION: "3.17.0"
   ARGOCD_CLI_VERSION: "v2.14.0"
   FILEBEAT_VERSION: "8.17.0"   # must match image tag in apps/filebeat/Dockerfile and helm/charts/filebeat/values.yaml
+  KANIKO_VERSION: "v1.23.2"    # used in .docker_base image tag; keep in sync with the -debug suffix below
 
 # =============================================================================
 # Reusable job templates — do not edit per-project.
@@ -85,13 +97,13 @@ variables:
 
 .docker_base:
   extends: .base
-  image: docker:27
-  services:
-    - docker:27-dind
-  variables:
-    DOCKER_TLS_CERTDIR: "/certs"
+  image:
+    # PRIVATE NETWORK: replace with <your-registry>/docker-virtual/gcr.io/kaniko-project/executor:v1.23.2-debug
+    name: gcr.io/kaniko-project/executor:${KANIKO_VERSION}-debug
+    entrypoint: [""]
   before_script:
-    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
 
 # =============================================================================
 # Single source of truth for pipeline triggers.

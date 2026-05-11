@@ -92,12 +92,6 @@ export function AppShell({ children }: PropsWithChildren) {
         })}
       </List>
       <Box sx={{ flex: 1 }} />
-      <Divider />
-      <Box sx={{ p: 2 }}>
-        <Typography variant="caption" color="text.secondary">
-          API: http://localhost:8000
-        </Typography>
-      </Box>
     </Box>
   )
 

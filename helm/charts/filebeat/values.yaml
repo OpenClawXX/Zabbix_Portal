@@ -7,12 +7,12 @@ image:
   pullPolicy: IfNotPresent
 
 elasticsearch:
-  # PRIVATE NETWORK: set hosts to your internal Elasticsearch cluster.
+  # UPDATE ME: replace with your existing Elasticsearch server URL.
   # e.g. https://elasticsearch.internal.example.com:9200
   # For TLS with a self-signed / internal CA also set in filebeat.yml:
   #   ssl.certificate_authorities: ["/path/to/ca.crt"]
   #   ssl.verification_mode: full  (use "none" only in isolated local dev)
-  hosts: "elasticsearch:9200"
+  hosts: ""  # UPDATE ME: set to your Elasticsearch server URL
   username: "elastic"
 
   # Reference an existing Secret that holds the Elasticsearch password.

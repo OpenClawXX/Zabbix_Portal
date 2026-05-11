@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     container_name: zabbix-portal-backend
     ports:
-      - "8000:8000"
+      - "8000:8000"   # direct API access (useful for testing endpoints)
     env_file:
       - ./apps/backend/.env
     restart: unless-stopped
@@ -24,49 +24,37 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-    ports:
-      - "8080:8080"
     restart: unless-stopped
+    # No published port — the proxy service below is the single entry point for the UI.
 
-  elasticsearch:
-    # PRIVATE NETWORK: change to <your-registry>/docker-virtual/docker.elastic.co/elasticsearch/elasticsearch:8.17.0
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
-    container_name: zabbix-portal-elasticsearch
-    environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false   # auth disabled for local dev — enable in all other environments
-      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+  proxy:
+    # PRIVATE NETWORK: change to <your-registry>/docker-virtual/nginx:1.27-alpine
+    image: nginx:1.27-alpine
+    container_name: zabbix-portal-proxy
     ports:
-      - "9200:9200"
-    volumes:
-      - elasticsearch-data:/usr/share/elasticsearch/data
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health?wait_for_status=yellow"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 40s
-
-  filebeat:
-    build:
-      context: ./apps/filebeat
-      dockerfile: Dockerfile
-    container_name: zabbix-portal-filebeat
+      - "80:80"
     depends_on:
-      elasticsearch:
+      backend:
         condition: service_healthy
-    environment:
-      # PRIVATE NETWORK: set ELASTICSEARCH_HOSTS to your internal Elasticsearch URL
-      # e.g. https://elasticsearch.internal.example.com:9200
-      - ELASTICSEARCH_HOSTS=elasticsearch:9200
-      - ELASTICSEARCH_USER=elastic
-      - ELASTICSEARCH_PASSWORD=
+      frontend:
+        condition: service_started
     volumes:
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - /var/log:/var/log:ro
-    user: root   # host log paths require root read access in local Docker
+      - ./nginx.compose.conf:/etc/nginx/conf.d/default.conf:ro
     restart: unless-stopped
 
-volumes:
-  elasticsearch-data:
+  # filebeat:
+  #   build:
+  #     context: ./apps/filebeat
+  #     dockerfile: Dockerfile
+  #   container_name: zabbix-portal-filebeat
+  #   environment:
+  #     # UPDATE ME: set to your existing Elasticsearch server URL
+  #     # e.g. https://elasticsearch.internal.example.com:9200
+  #     - ELASTICSEARCH_HOSTS=  # UPDATE ME
+  #     - ELASTICSEARCH_USER=elastic
+  #     - ELASTICSEARCH_PASSWORD=
+  #   volumes:
+  #     - /var/lib/docker/containers:/var/lib/docker/containers:ro
+  #     - /var/log:/var/log:ro
+  #   user: root   # host log paths require root read access in local Docker
+  #   restart: unless-stopped

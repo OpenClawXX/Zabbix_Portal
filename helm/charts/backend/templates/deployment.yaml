@@ -1,17 +1,17 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "zabbix-portal-backend.fullname" . }}
+  name: {{ include "backend.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "zabbix-portal-backend.labels" . | nindent 4 }}
+    {{- include "backend.labels" . | nindent 4 }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:
     matchLabels:
-      {{- include "zabbix-portal-backend.selectorLabels" . | nindent 6 }}
+      {{- include "backend.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       annotations:
@@ -20,7 +20,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
-        {{- include "zabbix-portal-backend.selectorLabels" . | nindent 8 }}
+        {{- include "backend.selectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -29,7 +29,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "zabbix-portal-backend.serviceAccountName" . }}
+      serviceAccountName: {{ include "backend.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
@@ -44,13 +44,13 @@ spec:
               protocol: TCP
           envFrom:
             - configMapRef:
-                name: {{ include "zabbix-portal-backend.fullname" . }}-config
+                name: {{ include "backend.fullname" . }}-config
             {{- if .Values.existingSecret }}
             - secretRef:
                 name: {{ .Values.existingSecret }}
             {{- else }}
             - secretRef:
-                name: {{ include "zabbix-portal-backend.fullname" . }}-secret
+                name: {{ include "backend.fullname" . }}-secret
             {{- end }}
           env:
             {{- range $key, $value := .Values.env }}

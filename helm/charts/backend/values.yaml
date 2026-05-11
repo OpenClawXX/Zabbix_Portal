@@ -1,7 +1,7 @@
 replicaCount: 1
 
 image:
-  repository: zabbix-portal-backend
+  repository: backend
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -47,14 +47,14 @@ ingress:
     # kubernetes.io/ingress.class: nginx
     # kubernetes.io/tls-acme: "true"
   hosts:
-    - host: zabbix-portal-backend.local
+    - host: backend.local
       paths:
         - path: /
           pathType: Prefix
   tls: []
-  #  - secretName: zabbix-portal-backend-tls
+  #  - secretName: backend-tls
   #    hosts:
-  #      - zabbix-portal-backend.local
+  #      - backend.local
 
 resources:
   requests:
@@ -102,7 +102,7 @@ env:
 
 # If set, this existing Secret will be used as envFrom secretRef
 # instead of rendering the secret.yaml template
-existingSecret: "zabbix-portal-backend-secret"
+existingSecret: "backend-secret"
 
 # Additional arbitrary key/value pairs mounted as a ConfigMap and
 # injected via envFrom configMapRef

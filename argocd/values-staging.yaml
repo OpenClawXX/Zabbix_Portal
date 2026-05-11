@@ -1,11 +1,12 @@
 # ── Staging environment overrides ────────────────────────────────────────────
-# Applied on top of helm/charts/zabbix-portal/values.yaml
+# Applied on top of helm/charts/<project>/values.yaml
 
-zabbix-portal-backend:
+backend:
   replicaCount: 2
 
   image:
-    repository: your-registry/zabbix-portal-backend
+    # PROJECT-SPECIFIC: set to your registry path
+    repository: your-registry/backend
     tag: staging
     pullPolicy: IfNotPresent
 
@@ -17,7 +18,7 @@ zabbix-portal-backend:
       nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
       nginx.ingress.kubernetes.io/proxy-read-timeout: "90"
     hosts:
-      - host: api.staging.zabbix-portal.local
+      - host: api.staging.backend.local
         paths:
           - path: /
             pathType: Prefix
@@ -35,7 +36,9 @@ zabbix-portal-backend:
     LOG_LEVEL: "INFO"
     ENVIRONMENT: "staging"
 
-  existingSecret: "zabbix-portal-backend-secret-staging"
+  # PROJECT-SPECIFIC: create before deploying:
+  #   kubectl create secret generic backend-secret-staging --from-literal=... -n <namespace>
+  existingSecret: "backend-secret-staging"
 
   autoscaling:
     enabled: true
@@ -43,11 +46,12 @@ zabbix-portal-backend:
     maxReplicas: 5
     targetCPUUtilizationPercentage: 80
 
-zabbix-portal-frontend:
+frontend:
   replicaCount: 2
 
   image:
-    repository: your-registry/zabbix-portal-frontend
+    # PROJECT-SPECIFIC: set to your registry path
+    repository: your-registry/frontend
     tag: staging
     pullPolicy: IfNotPresent
 
@@ -57,7 +61,7 @@ zabbix-portal-frontend:
     annotations:
       nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
     hosts:
-      - host: staging.zabbix-portal.local
+      - host: staging.frontend.local
         paths:
           - path: /
             pathType: Prefix

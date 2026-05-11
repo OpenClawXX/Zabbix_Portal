@@ -13,8 +13,10 @@
 #   REPO_URL                git repo URL of this monorepo
 #   HELM_CHART_PATH         path to umbrella chart
 #   IN_CLUSTER_SERVER       usually https://kubernetes.default.svc
-#   BACKEND_HELM_KEY        e.g. zabbix-portal-backend
-#   FRONTEND_HELM_KEY       e.g. zabbix-portal-frontend
+#   BACKEND_HELM_KEY        sub-chart name, e.g. backend
+#   FRONTEND_HELM_KEY       sub-chart name, e.g. frontend
+#   LOCAL_DOMAIN            internal cluster domain suffix, e.g. local or cluster.internal
+#   PROD_DOMAIN             public production domain, e.g. example.com
 # =============================================================================
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
@@ -35,8 +37,8 @@ spec:
           - env: dev
             namespace: ${PROJECT_NAME}-dev
             targetRevision: HEAD
-            backendHost: api.dev.${PROJECT_NAME}.local
-            frontendHost: dev.${PROJECT_NAME}.local
+            backendHost: api.dev.${PROJECT_NAME}.${LOCAL_DOMAIN}
+            frontendHost: dev.${PROJECT_NAME}.${LOCAL_DOMAIN}
             backendReplicas: "1"
             frontendReplicas: "1"
             backendTag: latest
@@ -55,8 +57,8 @@ spec:
           - env: staging
             namespace: ${PROJECT_NAME}-staging
             targetRevision: HEAD
-            backendHost: api.staging.${PROJECT_NAME}.local
-            frontendHost: staging.${PROJECT_NAME}.local
+            backendHost: api.staging.${PROJECT_NAME}.${LOCAL_DOMAIN}
+            frontendHost: staging.${PROJECT_NAME}.${LOCAL_DOMAIN}
             backendReplicas: "2"
             frontendReplicas: "2"
             backendTag: latest
@@ -75,8 +77,8 @@ spec:
           - env: production
             namespace: ${PROJECT_NAME}
             targetRevision: main
-            backendHost: api.${PROJECT_NAME}.example.com
-            frontendHost: ${PROJECT_NAME}.example.com
+            backendHost: api.${PROJECT_NAME}.${PROD_DOMAIN}
+            frontendHost: ${PROJECT_NAME}.${PROD_DOMAIN}
             backendReplicas: "3"
             frontendReplicas: "3"
             backendTag: stable

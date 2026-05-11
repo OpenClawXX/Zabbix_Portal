@@ -12,6 +12,8 @@ LICENCE*
 
 # Local dev config
 docker-compose.yml
+nginx.compose.conf
+package-lock.json
 .cienv
 .cienv-example
 .claude/

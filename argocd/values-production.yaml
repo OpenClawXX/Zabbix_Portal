@@ -1,12 +1,13 @@
 # ── Production environment overrides ─────────────────────────────────────────
-# Applied on top of helm/charts/zabbix-portal/values.yaml
+# Applied on top of helm/charts/<project>/values.yaml
 # Higher replica counts, stricter resource limits, TLS enabled.
 
-zabbix-portal-backend:
+backend:
   replicaCount: 3
 
   image:
-    repository: your-registry/zabbix-portal-backend
+    # PROJECT-SPECIFIC: set to your registry path
+    repository: your-registry/backend
     tag: stable      # Pin to a stable/immutable tag in production
     pullPolicy: IfNotPresent
 
@@ -27,14 +28,14 @@ zabbix-portal-backend:
       nginx.ingress.kubernetes.io/rate-limit-burst-multiplier: "5"
       cert-manager.io/cluster-issuer: "letsencrypt-prod"
     hosts:
-      - host: api.zabbix-portal.example.com
+      - host: api.backend.example.com   # PROJECT-SPECIFIC: set to your production hostname
         paths:
           - path: /
             pathType: Prefix
     tls:
-      - secretName: zabbix-portal-backend-prod-tls
+      - secretName: backend-tls
         hosts:
-          - api.zabbix-portal.example.com
+          - api.backend.example.com     # PROJECT-SPECIFIC: match the host above
 
   resources:
     requests:
@@ -48,7 +49,9 @@ zabbix-portal-backend:
     LOG_LEVEL: "WARNING"
     ENVIRONMENT: "production"
 
-  existingSecret: "zabbix-portal-backend-secret-production"
+  # PROJECT-SPECIFIC: create before deploying:
+  #   kubectl create secret generic backend-secret-production --from-literal=... -n <namespace>
+  existingSecret: "backend-secret-production"
 
   autoscaling:
     enabled: true
@@ -65,20 +68,21 @@ zabbix-portal-backend:
               - key: app.kubernetes.io/name
                 operator: In
                 values:
-                  - zabbix-portal-backend
+                  - backend   # matches the sub-chart name (Chart.yaml name: backend)
           topologyKey: kubernetes.io/hostname
 
-zabbix-portal-frontend:
+frontend:
   replicaCount: 3
 
   image:
-    repository: your-registry/zabbix-portal-frontend
+    # PROJECT-SPECIFIC: set to your registry path
+    repository: your-registry/frontend
     tag: stable
     pullPolicy: IfNotPresent
 
   podAnnotations:
     prometheus.io/scrape: "true"
-    prometheus.io/port: "80"
+    prometheus.io/port: "8080"
     prometheus.io/path: "/healthz"
 
   ingress:
@@ -89,14 +93,14 @@ zabbix-portal-frontend:
       nginx.ingress.kubernetes.io/ssl-redirect: "true"
       cert-manager.io/cluster-issuer: "letsencrypt-prod"
     hosts:
-      - host: zabbix-portal.example.com
+      - host: frontend.example.com      # PROJECT-SPECIFIC: set to your production hostname
         paths:
           - path: /
             pathType: Prefix
     tls:
-      - secretName: zabbix-portal-frontend-prod-tls
+      - secretName: frontend-tls
         hosts:
-          - zabbix-portal.example.com
+          - frontend.example.com        # PROJECT-SPECIFIC: match the host above
 
   resources:
     requests:
@@ -121,5 +125,5 @@ zabbix-portal-frontend:
               - key: app.kubernetes.io/name
                 operator: In
                 values:
-                  - zabbix-portal-frontend
+                  - frontend  # matches the sub-chart name (Chart.yaml name: frontend)
           topologyKey: kubernetes.io/hostname

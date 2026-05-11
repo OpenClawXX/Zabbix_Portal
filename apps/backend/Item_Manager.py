@@ -1,6 +1,6 @@
-from ZabbixBase import ZabbixBase
+from Zabbix_Base import Zabbix_Base
 
-class Item_Manager(ZabbixBase):
+class Item_Manager(Zabbix_Base):
     def __init__(self):
         super().__init__()
         print("Item Manager ready.")

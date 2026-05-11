@@ -38,7 +38,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 # Dev server (listens on :6769 — note: NOT 8000, that is for Docker only)
-uvicorn main:app --host 0.0.0.0 --port 6769 --reload
+uvicorn Zabbix_Main:app --host 0.0.0.0 --port 6769 --reload
 
 # Lint / format
 ruff check . && ruff format --check .
@@ -88,14 +88,14 @@ docker compose up --build
 flowchart LR
     ZabbixBase --> Host_Manager
     ZabbixBase --> Item_Manager
-    Host_Manager --> main["main.py"]
+    Host_Manager --> main["Zabbix_Main.py"]
     Item_Manager --> main
 ```
 
 - **`ZabbixBase`** loads `apps/backend/.env` and creates a `zabbix_utils.ZabbixAPI` session. All managers inherit from it. `self.zapi` is `None` when Zabbix is unreachable — callers must guard against this.
 - **`Host_Manager`** wraps host CRUD and Excel export (`openpyxl` / `pandas`).
 - **`Item_Manager`** wraps item and trigger creation. Trigger expressions follow Zabbix 5.x classic format: `{hostname:item_key.last()} operator threshold`.
-- **`main.py`** instantiates one `Host_Manager` and one `Item_Manager` at module load time (module-level singletons). There is no dependency injection.
+- **`Zabbix_Main.py`** instantiates one `Host_Manager` and one `Item_Manager` at module load time (module-level singletons). There is no dependency injection.
 - FastAPI runs on **port 6769** locally (`__main__` block) and **port 8000** in Docker/Kubernetes.
 
 Required `.env` variables at `apps/backend/.env`:

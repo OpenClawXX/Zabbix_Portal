@@ -12,20 +12,23 @@
 #
 # No nginx — using Node.js `serve@14.2.4` instead.
 # `serve` is OpenShift-compatible: runs as non-root on port 8080.
-#
-# Also set the npm registry before running pnpm install:
-#   RUN pnpm config set registry https://<your-registry>/api/npm/npm/
 # =============================================================================
 
 # PRIVATE NETWORK: change to <your-registry>/docker-virtual/node:22.11.0-alpine3.20
 FROM node:22.11.0-alpine3.20 AS base
-RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
+# Install pnpm directly — avoids corepack's internet download on first use.
+# PRIVATE NETWORK: uncomment the two lines below to set your npm registry and disable SSL verification:
+# RUN npm config set registry https://<your-registry>/api/npm/npm/ \
+#     && npm config set strict-ssl false
+RUN npm install -g pnpm@9.15.4
 
 # ── Prune workspace to only what this app needs ──────────────────────────────
 FROM base AS pruner
 WORKDIR /app
-# PRIVATE NETWORK: ensure turbo@2.3.3 is available in your npm proxy
-RUN npm install -g turbo@2.3.3 --prefer-offline
+# PRIVATE NETWORK: npm registry/SSL config is inherited from base above.
+# If turbo is not yet cached in your proxy, install it with --registry explicitly:
+# RUN npm install -g turbo@2.3.3 --registry https://<your-registry>/api/npm/npm/
+RUN npm install -g turbo@2.3.3
 COPY . .
 RUN turbo prune --scope=@zabbix-portal/frontend --docker
 
@@ -34,14 +37,17 @@ FROM base AS installer
 WORKDIR /app
 COPY --from=pruner /app/out/json/ .
 COPY --from=pruner /app/out/pnpm-lock.yaml ./pnpm-lock.yaml
-# PRIVATE NETWORK: uncomment to point pnpm at your npm proxy:
-# RUN pnpm config set registry https://<your-registry>/api/npm/npm/
+# PRIVATE NETWORK: uncomment to set pnpm registry and disable SSL verification:
+# RUN pnpm config set registry https://<your-registry>/api/npm/npm/ \
+#     && pnpm config set strict-ssl false
 RUN pnpm install --frozen-lockfile
 
 # ── Build the frontend ────────────────────────────────────────────────────────
 FROM base AS builder
 WORKDIR /app
-COPY --from=installer /app/node_modules ./node_modules
+# Copy the full installer tree (root + all workspace node_modules) then overlay source.
+# Copying only /app/node_modules misses workspace-level node_modules (e.g. apps/frontend/node_modules).
+COPY --from=installer /app .
 COPY --from=pruner /app/out/full/ .
 RUN pnpm turbo build --filter=@zabbix-portal/frontend
 
@@ -56,7 +62,9 @@ RUN pnpm turbo build --filter=@zabbix-portal/frontend
 # PRIVATE NETWORK: change to <your-registry>/docker-virtual/node:22.11.0-alpine3.20
 FROM node:22.11.0-alpine3.20 AS runner
 
-# PRIVATE NETWORK: ensure serve@14.2.4 is available in your npm proxy
+# PRIVATE NETWORK: uncomment to set npm registry and disable SSL verification:
+# RUN npm config set registry https://<your-registry>/api/npm/npm/ \
+#     && npm config set strict-ssl false
 RUN npm install -g serve@14.2.4
 
 # Prepare a writable app directory owned by 1001 with group-write for OpenShift

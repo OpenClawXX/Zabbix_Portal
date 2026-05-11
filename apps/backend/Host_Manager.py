@@ -1,8 +1,8 @@
-from ZabbixBase import ZabbixBase
+from Zabbix_Base import Zabbix_Base
 import openpyxl
 from io import BytesIO
 
-class Host_Manager(ZabbixBase):
+class Host_Manager(Zabbix_Base):
     def __init__(self):
         super().__init__()
         print("Host Manager ready.")

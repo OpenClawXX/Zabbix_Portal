@@ -30,12 +30,12 @@ processors:
         project: zabbix-portal
 
 output.elasticsearch:
-  # PRIVATE NETWORK: set ELASTICSEARCH_HOSTS to your internal Elasticsearch cluster.
+  # UPDATE ME: set ELASTICSEARCH_HOSTS to your existing Elasticsearch server URL.
   # e.g. https://elasticsearch.internal.example.com:9200
   # For TLS with a self-signed or internal CA, also add:
   #   ssl.certificate_authorities: ["/path/to/ca.crt"]
   #   ssl.verification_mode: full   # or "none" for local dev only
-  hosts: ["${ELASTICSEARCH_HOSTS:elasticsearch:9200}"]
+  hosts: ["${ELASTICSEARCH_HOSTS}"]
   username: "${ELASTICSEARCH_USER:elastic}"
   password: "${ELASTICSEARCH_PASSWORD}"
 

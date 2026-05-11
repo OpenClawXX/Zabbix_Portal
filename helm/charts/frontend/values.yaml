@@ -1,7 +1,7 @@
 replicaCount: 1
 
 image:
-  repository: zabbix-portal-frontend
+  repository: frontend
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -44,14 +44,14 @@ ingress:
   className: ""
   annotations: {}
   hosts:
-    - host: zabbix-portal.local
+    - host: frontend.local
       paths:
         - path: /
           pathType: Prefix
   tls: []
 
 # The backend service name and port used when apiProxy.enabled is true.
-# backendServiceName defaults to <release-name>-zabbix-portal-backend when left empty.
+# backendServiceName defaults to <release-name>-backend when left empty.
 backendServiceName: ""
 backendServicePort: 8000
 
