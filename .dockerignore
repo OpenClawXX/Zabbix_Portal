@@ -1,17 +1,59 @@
+# VCS / CI / deployment config — none of this belongs in the image
 .git
 .gitignore
+.gitlab
+.github
+argocd
+helm
 
-venv/
-.venv/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.mypy_cache/
+# Documentation
+*.md
+LICENCE*
 
-frontend/
-node_modules/
-dist/
-*.log
+# Local dev config
+docker-compose.yml
+.cienv
+.cienv-example
+.claude/
 
+# Backend Python source — the frontend build only needs apps/backend/package.json
+# for turbo workspace graph resolution; the Python source itself is irrelevant
+apps/backend/*.py
+apps/backend/requirements.txt
+apps/backend/Dockerfile
+
+# Backend runtime artifacts
+apps/backend/venv/
+apps/backend/.venv/
+apps/backend/__pycache__/
+apps/backend/*.py[cod]
+apps/backend/.pytest_cache/
+apps/backend/.mypy_cache/
+apps/backend/coverage/
+apps/backend/.coverage
+apps/backend/htmlcov/
+
+# Frontend build / runtime artifacts (rebuilt inside the container)
+**/node_modules/
+apps/frontend/dist/
+apps/frontend/.vite/
+apps/frontend/package-lock.json
+
+# TypeScript incremental build / Turborepo cache
+*.tsbuildinfo
+.turbo/
+**/.turbo/
+
+# Test coverage
+coverage/
+.coverage
+htmlcov/
+.nyc_output/
+
+# Secrets
 .env
 .env.*
+
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,33 @@
+{
+  "name": "@zabbix-portal/frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@emotion/react": "11.11.4",
+    "@emotion/styled": "11.11.5",
+    "@fontsource/inter": "5.0.18",
+    "@mui/icons-material": "5.15.20",
+    "@mui/material": "5.15.20",
+    "@mui/x-data-grid": "6.20.2",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "react-router-dom": "6.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.2",
+    "@types/react": "18.2.66",
+    "@types/react-dom": "18.2.22",
+    "@vitejs/plugin-react": "4.3.1",
+    "typescript": "5.4.5",
+    "vite": "5.4.10"
+  }
+}

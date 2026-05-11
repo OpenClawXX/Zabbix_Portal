@@ -1,0 +1,6 @@
+{
+  "name": "@zabbix-portal/filebeat",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Filebeat log-shipping sidecar for Zabbix Portal"
+}

@@ -1,0 +1,87 @@
+# =============================================================================
+# Cleanup — prunes stale image tags from the GitLab Container Registry.
+# =============================================================================
+# Triggered manually after a successful tag pipeline. For each registry
+# repository (backend and frontend) it:
+#   - Keeps ALL semver tags  (v1.2.3, v2.0.0, …) — releases are never deleted
+#   - Keeps the REGISTRY_KEEP_TAGS most recent non-semver tags (default: 10)
+#   - Deletes non-semver tags older than REGISTRY_TAG_TTL_DAYS days (default: 7)
+#
+# GitLab processes registry deletions asynchronously — tags disappear within
+# a few minutes of the job completing.
+#
+# Required variables (auto-provided by GitLab):
+#   CI_API_V4_URL   — e.g. https://gitlab.example.com/api/v4
+#   CI_PROJECT_ID   — numeric project ID
+#   CI_JOB_TOKEN    — short-lived token with registry write access
+#
+# Optional overrides (set in GitLab Settings → CI/CD → Variables):
+#   REGISTRY_KEEP_TAGS      — non-semver tags to retain per repository (default: 10)
+#   REGISTRY_TAG_TTL_DAYS   — minimum age before a non-semver tag is eligible for deletion (default: 7)
+# =============================================================================
+
+cleanup:registry:
+  extends: .base
+  image: alpine:3.19
+  stage: cleanup
+  needs:
+    - job: detect
+      artifacts: true
+  variables:
+    REGISTRY_KEEP_TAGS: "10"
+    REGISTRY_TAG_TTL_DAYS: "7"
+  before_script:
+    - apk add --no-cache curl jq
+  script:
+    - |
+      set -e
+
+      echo "── Fetching container registry repositories ────────────"
+      REPOS=$(curl -sf \
+        --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/registry/repositories" | \
+        jq -r '.[].id')
+
+      if [ -z "$REPOS" ]; then
+        echo "No registry repositories found — nothing to clean."
+        exit 0
+      fi
+
+      for repo_id in $REPOS; do
+        REPO_NAME=$(curl -sf \
+          --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+          "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/registry/repositories/${repo_id}" | \
+          jq -r '.path')
+
+        echo "── Cleaning $REPO_NAME (id: $repo_id) ─────────────────"
+        echo "   Keep: semver tags + latest + ${REGISTRY_KEEP_TAGS} most recent"
+        echo "   TTL : delete non-semver tags older than ${REGISTRY_TAG_TTL_DAYS} days"
+
+        # GitLab bulk-delete endpoint:
+        #   name_regex_delete  — tags to consider for deletion
+        #   name_regex_keep    — tags to always preserve (overrides delete regex)
+        #   keep_n             — keep this many of the most recently pushed tags
+        #   older_than         — only delete tags pushed more than N days ago
+        HTTP_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+          --request DELETE \
+          --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+          --data-urlencode "name_regex_delete=.*" \
+          --data-urlencode "name_regex_keep=^v[0-9]+\.[0-9]+\.[0-9]+$|^latest$" \
+          --data-urlencode "keep_n=${REGISTRY_KEEP_TAGS}" \
+          --data-urlencode "older_than=${REGISTRY_TAG_TTL_DAYS}d" \
+          "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/registry/repositories/${repo_id}/tags")
+
+        if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "202" ]; then
+          echo "  → Cleanup queued for $REPO_NAME (status $HTTP_STATUS)"
+        else
+          echo "  → Unexpected status $HTTP_STATUS for $REPO_NAME — skipping."
+        fi
+      done
+
+      echo "──────────────────────────────────────────────────────"
+      echo "Cleanup requests submitted. GitLab processes deletions"
+      echo "asynchronously — tags will disappear within minutes."
+  rules:
+    - if: $CI_COMMIT_TAG
+      when: manual
+      allow_failure: true

@@ -1,0 +1,16 @@
+apiVersion: v2
+name: zabbix-portal
+description: Zabbix Portal - full stack monitoring UI
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+dependencies:
+  - name: zabbix-portal-backend
+    version: "0.1.0"
+    repository: "file://../backend"
+  - name: zabbix-portal-frontend
+    version: "0.1.0"
+    repository: "file://../frontend"
+  - name: filebeat
+    version: "0.1.0"
+    repository: "file://../filebeat"

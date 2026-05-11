@@ -1,0 +1,100 @@
+replicaCount: 1
+
+image:
+  repository: zabbix-portal-frontend
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+podLabels: {}
+
+# OpenShift assigns a random UID at runtime; GID is always 0 (root group).
+# fsGroup: 0 ensures files copied in are readable by that GID.
+podSecurityContext:
+  fsGroup: 0
+  runAsNonRoot: true
+
+# No NET_BIND_SERVICE needed — serve runs on port 8080 (unprivileged).
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1001
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: zabbix-portal.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# The backend service name and port used when apiProxy.enabled is true.
+# backendServiceName defaults to <release-name>-zabbix-portal-backend when left empty.
+backendServiceName: ""
+backendServicePort: 8000
+
+# When enabled, the Ingress will include a second path rule that routes
+# /api/* to the backend service (path rewritten to strip /api/).
+# This replaces the nginx proxy_pass that ran inside the container.
+apiProxy:
+  enabled: true
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+
+livenessProbe:
+  httpGet:
+    path: /
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 20
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

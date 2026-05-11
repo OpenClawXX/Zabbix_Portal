@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "filebeat.fullname" . }}-config
+  labels:
+    {{- include "filebeat.labels" . | nindent 4 }}
+data:
+  filebeat.yml: |
+    filebeat.autodiscover:
+      providers:
+        - type: kubernetes
+          node: ${NODE_NAME}
+          hints.enabled: true
+          hints.default_config:
+            type: container
+            paths:
+              - /var/log/containers/*${data.kubernetes.container.id}.log
+
+    processors:
+      - add_kubernetes_metadata:
+          host: ${NODE_NAME}
+          matchers:
+            - logs_path:
+                logs_path: "/var/log/containers/"
+      - add_fields:
+          target: ''
+          fields:
+            project: {{ .Release.Name }}
+
+    output.elasticsearch:
+      # PRIVATE NETWORK: ELASTICSEARCH_HOSTS is injected from .Values.elasticsearch.hosts — see values.yaml
+      hosts: ["${ELASTICSEARCH_HOSTS}"]
+      username: "${ELASTICSEARCH_USER}"
+      password: "${ELASTICSEARCH_PASSWORD}"
+
+    logging.level: info
+    logging.to_files: false

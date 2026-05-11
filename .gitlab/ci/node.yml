@@ -1,45 +1,93 @@
-verify_node:
-  stage: verify
-  # Change to Artifactory mirror for Node image:
-  # image: "artifactory.example.local/docker-virtual/node:22"
-  image: $NODE_IMAGE
-  needs: ["detect_changed_languages"]
-  rules:
-    - if: $NODE_CHANGED == "true"
-      when: on_success
-    - when: never
-  cache:
-    key: "npm-${CI_COMMIT_REF_SLUG}"
-    paths:
-      - .npm/
-  script:
-    - cd frontend
-    # npm registry should point to Artifactory NPM (recommended npm 10.9.x with Node 22):
-    # npm config set registry https://artifactory.example.local/api/npm/npm/
-    - npm ci --cache ../.npm --prefer-offline
-    - npm run lint
+# =============================================================================
+# Frontend (Node.js / Turborepo / pnpm / Biome) pipeline.
+# =============================================================================
+# Runs only on tag pushes (see common.yml .rules_release).
+# Each job is additionally gated by detect.yml.
+# =============================================================================
 
-build_frontend_image:
-  stage: build
-  extends: .kaniko_registry_auth
-  image:
-    name: $KANIKO_IMAGE_FRONTEND
-    entrypoint: [""]
-  needs: ["verify_node", "detect_changed_languages"]
+.frontend_base:
+  extends: .base
+  image: node:${NODE_VERSION}-alpine
+  needs:
+    - job: detect
+      artifacts: true
+  before_script:
+    - corepack enable
+    - corepack prepare pnpm@${PNPM_VERSION} --activate
+    - pnpm install --frozen-lockfile
+  cache:
+    key:
+      files:
+        - pnpm-lock.yaml
+    paths:
+      - node_modules/
+      - $FRONTEND_PATH/node_modules/
+      - .turbo/
+
+# ── Lint (Biome) ──────────────────────────────────────────────────────────────
+frontend:lint:
+  extends: .frontend_base
+  stage: lint
+  script:
+    - pnpm turbo lint --filter="$FRONTEND_PACKAGE"
   rules:
-    - if: $NODE_CHANGED == "true"
-      when: on_success
-    - when: never
+    - if: $CI_COMMIT_TAG && $FRONTEND_CHANGED == "1"
+
+# ── Type-check (tsc) ──────────────────────────────────────────────────────────
+frontend:typecheck:
+  extends: .frontend_base
+  stage: lint
+  script:
+    - pnpm turbo typecheck --filter="$FRONTEND_PACKAGE"
+  rules:
+    - if: $CI_COMMIT_TAG && $FRONTEND_CHANGED == "1"
+
+# ── Build (Turborepo cached) ──────────────────────────────────────────────────
+frontend:build:
+  extends: .frontend_base
+  stage: build
+  needs:
+    - job: detect
+      artifacts: true
+    - job: frontend:lint
+      optional: true
+    - job: frontend:typecheck
+      optional: true
+  script:
+    - pnpm turbo build --filter="$FRONTEND_PACKAGE"
+  artifacts:
+    paths:
+      - $FRONTEND_PATH/dist/
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_TAG && $FRONTEND_CHANGED == "1"
+
+# ── Build & push Docker image ─────────────────────────────────────────────────
+frontend:docker:build:
+  extends: .docker_base
+  stage: build
+  needs:
+    - job: detect
+      artifacts: true
+    - job: frontend:build
+      optional: true
   script:
     - |
-      DEST="${ARTIFACTORY_DOCKER_REGISTRY}/${ARTIFACTORY_DOCKER_REPO_PATH}/frontend:${CI_COMMIT_SHORT_SHA}"
-      EXTRA=""
-      if [ "$KANIKO_SKIP_TLS_VERIFY" = "true" ]; then
-        EXTRA="${EXTRA} --skip-tls-verify"
-      fi
-      /kaniko/executor \
-        --context "${CI_PROJECT_DIR}/frontend" \
-        --dockerfile "${CI_PROJECT_DIR}/frontend/Dockerfile" \
-        --destination "$DEST" \
-        --compressed-caching=false \
-        $EXTRA
+      docker build \
+        --cache-from "$FRONTEND_IMAGE:latest" \
+        --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" \
+        --label "org.opencontainers.image.version=$CI_COMMIT_TAG" \
+        --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        -f "$FRONTEND_PATH/Dockerfile" \
+        -t "$FRONTEND_IMAGE:$CI_COMMIT_TAG" \
+        -t "$FRONTEND_IMAGE:latest" \
+        .
+      docker push "$FRONTEND_IMAGE:$CI_COMMIT_TAG"
+      docker push "$FRONTEND_IMAGE:latest"
+      echo "FRONTEND_IMAGE_TAG=$CI_COMMIT_TAG" > build-frontend.env
+  artifacts:
+    reports:
+      dotenv: build-frontend.env
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_TAG && $FRONTEND_CHANGED == "1"

@@ -1,0 +1,70 @@
+# ── Dev environment overrides ─────────────────────────────────────────────────
+# Applied on top of helm/charts/zabbix-portal/values.yaml
+
+zabbix-portal-backend:
+  replicaCount: 1
+
+  image:
+    repository: your-registry/zabbix-portal-backend
+    tag: latest
+    pullPolicy: Always    # Always pull in dev to pick up fresh :latest images
+
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/rewrite-target: /
+    hosts:
+      - host: api.dev.zabbix-portal.local
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+  # Enable verbose logging in dev
+  config:
+    LOG_LEVEL: "DEBUG"
+    ENVIRONMENT: "dev"
+
+  # Point at a dev-specific Zabbix instance
+  existingSecret: "zabbix-portal-backend-secret-dev"
+
+  autoscaling:
+    enabled: false
+
+zabbix-portal-frontend:
+  replicaCount: 1
+
+  image:
+    repository: your-registry/zabbix-portal-frontend
+    tag: latest
+    pullPolicy: Always
+
+  ingress:
+    enabled: true
+    className: nginx
+    hosts:
+      - host: dev.zabbix-portal.local
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+  autoscaling:
+    enabled: false

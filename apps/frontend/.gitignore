@@ -1,0 +1,43 @@
+# Build output
+dist
+dist-ssr
+
+# Dependencies
+node_modules
+
+# TypeScript incremental build
+*.tsbuildinfo
+
+# Turborepo cache
+.turbo/
+
+# Vite cache
+.vite/
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# npm lock file — this workspace uses pnpm
+package-lock.json
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.swp
+*.orig

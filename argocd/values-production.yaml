@@ -1,0 +1,125 @@
+# ── Production environment overrides ─────────────────────────────────────────
+# Applied on top of helm/charts/zabbix-portal/values.yaml
+# Higher replica counts, stricter resource limits, TLS enabled.
+
+zabbix-portal-backend:
+  replicaCount: 3
+
+  image:
+    repository: your-registry/zabbix-portal-backend
+    tag: stable      # Pin to a stable/immutable tag in production
+    pullPolicy: IfNotPresent
+
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/metrics"
+
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/rewrite-target: /
+      nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "90"
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      nginx.ingress.kubernetes.io/rate-limit: "100"
+      nginx.ingress.kubernetes.io/rate-limit-burst-multiplier: "5"
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    hosts:
+      - host: api.zabbix-portal.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: zabbix-portal-backend-prod-tls
+        hosts:
+          - api.zabbix-portal.example.com
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+  config:
+    LOG_LEVEL: "WARNING"
+    ENVIRONMENT: "production"
+
+  existingSecret: "zabbix-portal-backend-secret-production"
+
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - zabbix-portal-backend
+          topologyKey: kubernetes.io/hostname
+
+zabbix-portal-frontend:
+  replicaCount: 3
+
+  image:
+    repository: your-registry/zabbix-portal-frontend
+    tag: stable
+    pullPolicy: IfNotPresent
+
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "80"
+    prometheus.io/path: "/healthz"
+
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    hosts:
+      - host: zabbix-portal.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: zabbix-portal-frontend-prod-tls
+        hosts:
+          - zabbix-portal.example.com
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - zabbix-portal-frontend
+          topologyKey: kubernetes.io/hostname

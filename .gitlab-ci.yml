@@ -1,6 +1,17 @@
+stages:
+  - .pre
+  - lint
+  - build
+  - staging
+  - production
+  - dr
+  - cleanup
+
 include:
   - local: ".gitlab/ci/common.yml"
   - local: ".gitlab/ci/detect.yml"
   - local: ".gitlab/ci/python.yml"
   - local: ".gitlab/ci/node.yml"
+  - local: ".gitlab/ci/elastic.yml"
   - local: ".gitlab/ci/gitops.yml"
+  - local: ".gitlab/ci/cleanup.yml"

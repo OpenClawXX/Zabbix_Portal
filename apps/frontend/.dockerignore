@@ -1,0 +1,30 @@
+# VCS
+.git
+.gitignore
+
+# Dependencies / build output (rebuilt inside the container)
+node_modules
+dist
+.vite
+
+# TypeScript incremental build / Turborepo cache
+*.tsbuildinfo
+.turbo/
+
+# Documentation
+*.md
+nginx.conf
+
+# npm lock file (workspace uses pnpm)
+package-lock.json
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Secrets
+.env
+.env.*
+
+*.log
+.DS_Store

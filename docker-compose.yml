@@ -1,20 +1,72 @@
 services:
   backend:
     build:
-      context: .
-      dockerfile: Dockerfile.backend
+      context: ./apps/backend
+      dockerfile: Dockerfile
     container_name: zabbix-portal-backend
     ports:
       - "8000:8000"
+    env_file:
+      - ./apps/backend/.env
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   frontend:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: apps/frontend/Dockerfile
     container_name: zabbix-portal-frontend
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
-      - "8080:80"
+      - "8080:8080"
     restart: unless-stopped
+
+  elasticsearch:
+    # PRIVATE NETWORK: change to <your-registry>/docker-virtual/docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+    container_name: zabbix-portal-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false   # auth disabled for local dev — enable in all other environments
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health?wait_for_status=yellow"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  filebeat:
+    build:
+      context: ./apps/filebeat
+      dockerfile: Dockerfile
+    container_name: zabbix-portal-filebeat
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      # PRIVATE NETWORK: set ELASTICSEARCH_HOSTS to your internal Elasticsearch URL
+      # e.g. https://elasticsearch.internal.example.com:9200
+      - ELASTICSEARCH_HOSTS=elasticsearch:9200
+      - ELASTICSEARCH_USER=elastic
+      - ELASTICSEARCH_PASSWORD=
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/log:/var/log:ro
+    user: root   # host log paths require root read access in local Docker
+    restart: unless-stopped
+
+volumes:
+  elasticsearch-data:

@@ -1,138 +1,214 @@
-# Zabbix DevOps UI + API
+# Zabbix Portal
 
-A full-stack app for managing Zabbix hosts, items, and triggers.
+A full-stack DevOps UI for managing Zabbix hosts, items, and triggers — packaged as a Turborepo monorepo with first-class support for Kubernetes / OpenShift deployment via Helm + ArgoCD.
 
-- **Backend:** FastAPI (`main.py`)
-- **Frontend:** React + Vite (`frontend/`)
-- **Core features:** host management, item creation, trigger creation, host inventory export, bulk host import (`.csv`/`.xlsx`)
+- **Backend** — Python 3.12 / FastAPI (`apps/backend/`)
+- **Frontend** — React 18 / Vite / TypeScript / MUI (`apps/frontend/`)
+- **Filebeat** — Elastic log shipper, ships container logs to Elasticsearch (`apps/filebeat/`)
+- **Toolchain** — pnpm workspaces, Turborepo, Biome
+- **Deployment** — Helm charts + ArgoCD ApplicationSet (staging / production / DR)
+
+> See [`CLAUDE.md`](./CLAUDE.md) for an architectural reference, [`WORKFLOW.md`](./WORKFLOW.md) for the end-to-end development and CI/CD flow, and [`RELEASING.md`](./RELEASING.md) for the release process.
+
+---
 
 ## Features
 
-- Health check for API/Zabbix connectivity
+- Health check for API / Zabbix connectivity
 - Create, list, delete hosts
-- Export hosts inventory to Excel (`.xlsx`)
-- Bulk create hosts from `.csv` / `.xlsx`
-- Add monitoring items to hosts
-- Add triggers for host items
-- Frontend popup notifications for user actions
+- Bulk-create hosts from `.csv` / `.xlsx`
+- Export host inventory to `.xlsx`
+- Add monitoring items and triggers to hosts
+- Toast-style notifications for all user actions
 
-## Project Structure
+---
 
-- `main.py` - FastAPI app and routes
-- `Host_Manager.py` - Host operations (create/delete/list/export)
-- `Item_Manager.py` - Item and trigger operations
-- `ZabbixBase.py` - Base Zabbix connection logic
-- `frontend/` - React app
-- `Dockerfile.backend` - Backend Docker image
-- `frontend/Dockerfile` - Frontend Docker image (Nginx)
+## Repository layout
+
+```
+apps/
+  backend/    FastAPI app (Python 3.12)
+  frontend/   React/Vite SPA (TypeScript)
+  filebeat/   Filebeat log shipper (Elastic 8.17)
+helm/
+  charts/
+    backend/        standalone Helm chart
+    frontend/       standalone Helm chart
+    filebeat/       Filebeat DaemonSet chart
+    zabbix-portal/  umbrella chart (depends on all three)
+argocd/             AppProject, Application, ApplicationSet, per-env values
+.gitlab/ci/         modular GitLab CI pipeline (common, detect, python, node, elastic, gitops, cleanup)
+turbo.json          Turborepo task pipeline
+biome.json          Biome (linter + formatter)
+pnpm-workspace.yaml pnpm workspace declaration
+.npmrc              Frozen-lockfile / private-registry config
+docker-compose.yml  Local stack (backend + frontend + Elasticsearch + Filebeat)
+```
+
+---
 
 ## Requirements
 
-- Python 3.10+
-- Node.js 20+ (or 22 recommended)
-- Access to a Zabbix server/API
+- **Python** 3.12+
+- **Node.js** 22+ and **pnpm** 9.15+
+- **Docker** + Docker Compose for local containers
+- **Helm** 3.17+ and **kubectl** for cluster work
+- Access to a Zabbix server with API credentials
 
-Install backend dependencies:
+Install pnpm if needed:
 
 ```bash
+corepack enable && corepack prepare pnpm@9.15.4 --activate
+```
+
+---
+
+## Quick start (local development)
+
+```bash
+# 1. Install all workspace dependencies
+pnpm install
+
+# 2. Configure backend env (copy and edit)
+cp apps/backend/.env.example apps/backend/.env  # set ZABBIX_URL, ZABBIX_USER, ZABBIX_PASS
+
+# 3. Install backend Python deps
+cd apps/backend && python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+cd ../..
+
+# 4. Start backend (port 6769)
+pnpm --filter @zabbix-portal/backend dev
+
+# 5. In another terminal, start frontend (port 42069)
+pnpm --filter @zabbix-portal/frontend dev
 ```
 
-Install frontend dependencies:
+Open <http://localhost:42069>. The frontend proxies `/api/*` to `http://localhost:6769` via `vite.config.ts`.
+
+### `.env` for the backend
+
+Place at `apps/backend/.env`:
+
+```
+ZABBIX_URL=http://your-zabbix-server
+ZABBIX_USER=Admin
+ZABBIX_PASS=zabbix
+```
+
+The URL accepts either a base URL or the full `…/api_jsonrpc.php` endpoint.
+
+---
+
+## Available scripts (root)
 
 ```bash
-cd frontend
-npm install
+pnpm build       # turbo build across all workspaces
+pnpm dev         # turbo dev across all workspaces
+pnpm lint        # turbo lint (Biome on frontend, ruff on backend)
+pnpm typecheck   # turbo typecheck (tsc on frontend, mypy on backend)
+pnpm format      # biome format --write .
+pnpm check       # biome check --write .
+pnpm docker:build
+pnpm docker:up
+pnpm docker:down
 ```
 
-## Run Locally
-
-### 1) Start backend
-
-From project root:
+Filter to a single app with `--filter`:
 
 ```bash
-python main.py
+pnpm turbo build --filter=@zabbix-portal/frontend
+pnpm turbo lint  --filter=@zabbix-portal/backend
 ```
 
-Backend runs on:
+---
 
-- `http://0.0.0.0:8000`
-
-### 2) Start frontend
-
-From `frontend/`:
+## Local Docker
 
 ```bash
-npm run dev
+docker compose up --build
 ```
 
-Frontend host/port is configured in:
+- Backend → http://localhost:8000
+- Frontend → http://localhost:8080
+- Elasticsearch → http://localhost:9200
 
-- `frontend/vite.config.ts`
+The full stack includes Elasticsearch and Filebeat. Filebeat ships container logs to Elasticsearch automatically. Set `ELASTICSEARCH_PASSWORD` in the Filebeat service environment before starting if your cluster has auth enabled (it is disabled by default in the local compose file for convenience).
 
-Example:
+The frontend is served by [`serve`](https://www.npmjs.com/package/serve) (no nginx) on port 8080. Inside the cluster, `/api/*` routing to the backend is handled by the Ingress (see `helm/charts/frontend/templates/ingress.yaml` — `apiProxy.enabled`).
 
-- `host: '0.0.0.0'`
-- `port: 42069`
+---
 
-## API Endpoints
+## API endpoints
 
-- `GET /health` - API status + Zabbix connectivity
-- `GET /hosts` - List hosts
-- `POST /hosts` - Create host
-- `DELETE /hosts/{hostname}` - Delete host
-- `GET /hosts/download` - Download Excel inventory
-- `POST /hosts/bulk` - Bulk create hosts from file upload
-- `POST /items` - Add item to host
-- `POST /triggers` - Add trigger to item
+| Method | Path                       | Description                           |
+| ------ | -------------------------- | ------------------------------------- |
+| GET    | `/health`                  | API + Zabbix connectivity check       |
+| GET    | `/hosts`                   | List all hosts                        |
+| POST   | `/hosts`                   | Create a single host                  |
+| POST   | `/hosts/bulk`              | Bulk create from CSV / XLSX upload    |
+| GET    | `/hosts/download`          | Download host inventory as `.xlsx`    |
+| DELETE | `/hosts/{hostname}`        | Delete a host                         |
+| POST   | `/items`                   | Add a monitoring item to a host       |
+| POST   | `/triggers`                | Add a trigger to an item              |
 
-## Bulk Import File Format
+### Bulk import file format
 
-Upload `.csv` or `.xlsx` with these columns:
+CSV or XLSX with columns:
 
-- `hostname` (or `host`) - required
-- `ip` (or `ip_address`) - required
-- `template` - optional (defaults to `Linux by Zabbix agent`)
+- `hostname` (or `host`) — required
+- `ip` (or `ip_address`) — required
+- `template` — optional, defaults to `Linux by Zabbix agent`
 
-## Trigger Creation
+### Trigger expression format
 
-Trigger creation uses expression format:
+```
+{hostname:item_key.last()} operator threshold
 
-`{hostname:item_key.last()} operator threshold`
+# Example:
+{web-01:system.cpu.load.last()}>5
+```
 
-Example:
+---
 
-`{web-01:system.cpu.load.last()}>5`
+## Production deployment
 
-## Docker
-
-### Build backend image
-
-From project root:
+### Helm
 
 ```bash
-docker build -f Dockerfile.backend -t zabb-backend .
+# From repo root
+helm dependency build helm/charts/zabbix-portal/
+helm install zabbix-portal helm/charts/zabbix-portal/ \
+  --namespace zabbix-portal --create-namespace
 ```
 
-### Build frontend image
-
-From project root:
+### ArgoCD
 
 ```bash
-docker build -f frontend/Dockerfile -t zabb-frontend ./frontend
+kubectl apply -f argocd/appproject.yaml
+kubectl apply -f argocd/applicationset.yaml   # generates one Application per env
 ```
 
-> Frontend Nginx config proxies `/api` to `http://backend:8000/`, so the backend container/service should be reachable as `backend` on the same Docker network.
+The ApplicationSet creates `zabbix-portal-dev`, `zabbix-portal-staging`, and `zabbix-portal-production` Applications with environment-specific overrides.
 
-## Notes
+---
 
-- Restart dev servers after config changes (`vite.config.ts`, backend host/port, etc.).
-- Keep credentials/secrets in `.env` and do not commit them.
-- Release policy:
-  - `develop` branch publishes `:staging` images
-  - `main` branch and tags allow manual production publish (`:latest`, commit SHA, and tag image when tagged)
-- Ignore files are set up in:
-  - `.gitignore`
-  - `.dockerignore`
-  - `frontend/.dockerignore`
+## Private network / OpenShift
+
+This project is designed to run in air-gapped or private-registry environments:
+
+- All `FROM` lines in Dockerfiles have `# PRIVATE NETWORK:` comments showing the exact image and replacement format — including the Filebeat base image (`docker.elastic.co/beats/filebeat:8.17.0`).
+- The Elasticsearch URL in `apps/filebeat/filebeat.yml`, `helm/charts/filebeat/values.yaml`, and `docker-compose.yml` all have `# PRIVATE NETWORK:` comments for the internal cluster address.
+- npm packages are pinned to **exact versions** (no `^` or `~`) and `.npmrc` enforces `frozen-lockfile=true`.
+- The frontend container uses **`serve` instead of nginx** so it works under OpenShift's `restricted` SCC (non-root, port 8080, random UID + GID 0).
+- The Filebeat DaemonSet requires the `hostmount-anyuid` SCC on OpenShift to mount host log paths — see `helm/charts/filebeat/values.yaml` for the exact `oc adm policy` command.
+
+See [`CLAUDE.md`](./CLAUDE.md) for the full set of private-network considerations.
+
+---
+
+## Documentation
+
+- [`CLAUDE.md`](./CLAUDE.md) — architectural reference and conventions
+- [`WORKFLOW.md`](./WORKFLOW.md) — development + CI/CD pipeline flow
+- [`RELEASING.md`](./RELEASING.md) — release / deployment process

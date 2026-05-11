@@ -1,0 +1,21 @@
+{
+  "name": "zabbix-portal",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "format": "biome format --write .",
+    "check": "biome check --write .",
+    "docker:build": "docker compose build",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "1.9.4",
+    "turbo": "2.3.3"
+  },
+  "packageManager": "pnpm@9.15.4"
+}
