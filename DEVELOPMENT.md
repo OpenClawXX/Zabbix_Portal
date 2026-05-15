@@ -1,13 +1,12 @@
-# Running with Docker Compose
+# Running with Docker
 
-This guide covers building and running the full stack locally using Docker and Docker Compose. No Node.js or Python installation required on your machine.
+This guide covers building and running the backend and frontend as standalone Docker containers. No Python or Node.js installation required on your machine.
 
 ---
 
 ## Prerequisites
 
-- **Docker** 24+ with the Compose plugin (`docker compose`)  
-  Verify: `docker compose version`
+- **Docker** 24+ with Docker Desktop (Mac / Windows) or Docker Engine (Linux)
 
 ---
 
@@ -15,78 +14,94 @@ This guide covers building and running the full stack locally using Docker and D
 
 ```
 Browser
-  └── proxy (nginx :80)
-        ├── /api/*  →  backend (FastAPI :8000)
-        └── /*      →  frontend (serve :8080)
-
-filebeat (optional) → your Elasticsearch server
+  └── frontend (Next.js :42069)
+        └── /api/* → route handler → backend (FastAPI :6769)
+                                          └── Zabbix JSON-RPC
 ```
 
-The nginx proxy container replicates what the Kubernetes Ingress does in production — the frontend React app makes all API calls to `/api/*` as relative paths, so without the proxy those calls would fail.
+The Next.js route handler at `src/app/api/[...path]/route.ts` proxies all `/api/*` requests to the backend. The backend address is controlled by `BACKEND_URL` in `apps/frontend/.env`, which is baked into the frontend image at build time.
 
 ---
 
 ## One-time setup
 
-### 1. Create the backend environment file
+### 1. Configure the backend environment file
 
-The backend container will not start without this file.
-
-Create `apps/backend/.env`:
+Create `apps/backend/.env` (required — the backend will not connect to Zabbix without it):
 
 ```
 ZABBIX_URL=http://your-zabbix-server
 ZABBIX_USER=Admin
 ZABBIX_PASS=zabbix
+BACKEND_URL=http://backend:6769
 ```
 
-The URL accepts either a base URL (`http://host`) or the full endpoint (`http://host/api_jsonrpc.php`).
+`BACKEND_URL` is used by the frontend, not the backend process itself. Set it to `http://backend:6769` when running both containers on the same Docker network (the recommended setup below).
 
-### 2. Configure Filebeat (optional)
+### 2. Configure the frontend environment file
 
-If you want container logs shipped to Elasticsearch, open `docker-compose.yml` and fill in the Filebeat environment block:
+Edit `apps/frontend/.env`:
 
-```yaml
-  filebeat:
-    environment:
-      - ELASTICSEARCH_HOSTS=https://your-elasticsearch:9200   # UPDATE ME
-      - ELASTICSEARCH_USER=elastic
-      - ELASTICSEARCH_PASSWORD=your-password
+```
+BACKEND_URL=http://backend:6769
 ```
 
-If you do not need log shipping, you can skip this or comment out the `filebeat` service entirely.
+| Scenario | Value |
+|---|---|
+| Both containers on the same Docker network | `http://backend:6769` |
+| Mac / Windows Docker Desktop, backend running natively | `http://host.docker.internal:6769` |
+| Linux server, backend on the same host | `http://<host-ip>:6769` |
+
+This file is baked into the image — rebuild the frontend image after changing it.
 
 ---
 
-## Build and start
+## Build images
 
 ```bash
-# Build all images and start the stack (runs in foreground, Ctrl+C to stop)
-docker compose up --build
+# Backend — build context is apps/backend/
+docker build -t zabbix-portal-backend apps/backend/
 
-# Or run in the background
-docker compose up --build -d
-```
-
-The first build takes a few minutes — subsequent builds reuse Docker layer cache.
-
-The stack is ready when you see the backend health check pass:
-
-```
-zabbix-portal-backend  | INFO:     Application startup complete.
-zabbix-portal-proxy    | ...nginx started
+# Frontend — build context is apps/frontend/
+docker build -t zabbix-portal-frontend apps/frontend/
 ```
 
 ---
 
-## Access points
+## Run the stack
 
-| URL | What it is |
-|-----|-----------|
-| `http://localhost` | Full application UI (use this) |
-| `http://localhost/api/docs` | FastAPI interactive API docs |
-| `http://localhost:8000` | Backend API directly (bypasses proxy) |
-| `http://localhost:8000/health` | Health check endpoint |
+### Recommended: shared Docker network
+
+Containers on the same network reach each other by container name.
+
+```bash
+# Create the network once
+docker network create zabbix-net
+
+# Backend
+docker run -d \
+  --name backend \
+  --network zabbix-net \
+  --env-file apps/backend/.env \
+  -p 6769:6769 \
+  zabbix-portal-backend
+
+# Frontend
+docker run -d \
+  --name frontend \
+  --network zabbix-net \
+  -p 42069:42069 \
+  zabbix-portal-frontend
+```
+
+Open <http://localhost:42069>.
+
+### Stopping
+
+```bash
+docker stop frontend backend
+docker rm frontend backend
+```
 
 ---
 
@@ -95,69 +110,43 @@ zabbix-portal-proxy    | ...nginx started
 ### View logs
 
 ```bash
-# All services
-docker compose logs -f
-
-# One service
-docker compose logs -f backend
-docker compose logs -f frontend
-docker compose logs -f proxy
-docker compose logs -f filebeat
+docker logs -f frontend
+docker logs -f backend
 ```
 
-### Stop the stack
+### Rebuild a single image after a code change
 
 ```bash
-docker compose down
-```
-
-### Rebuild a single service after a code change
-
-```bash
-docker compose up --build backend -d
-docker compose up --build frontend -d
+docker build -t zabbix-portal-frontend apps/frontend/
+docker stop frontend && docker rm frontend
+docker run -d --name frontend --network zabbix-net -p 42069:42069 zabbix-portal-frontend
 ```
 
 ### Open a shell inside a running container
 
 ```bash
-docker compose exec backend bash
-docker compose exec frontend sh
-```
-
-### Check container status
-
-```bash
-docker compose ps
+docker exec -it backend bash
+docker exec -it frontend sh
 ```
 
 ---
 
-## Building images individually
+## Health check
 
-Useful for testing a single Dockerfile or pushing to a registry manually.
+The frontend polls `/api/health` every 10 seconds. The sidebar shows the result as a chip on mobile. A red banner appears across the top of every page if the backend is unreachable; a yellow banner appears if the backend is up but cannot connect to Zabbix.
+
+The backend exposes its own health endpoint directly:
 
 ```bash
-# Backend — build context is apps/backend/
-docker build -t zabbix-portal-backend apps/backend/
-
-# Frontend — build context MUST be repo root (Turborepo prune requires the full workspace)
-docker build -f apps/frontend/Dockerfile -t zabbix-portal-frontend .
-
-# Filebeat — build context is apps/filebeat/
-docker build -t zabbix-portal-filebeat apps/filebeat/
+curl http://localhost:6769/health
 ```
 
 ---
 
 ## Private network
 
-If your environment cannot reach public registries:
+**Docker base images** — every `FROM` line in the Dockerfiles has a `# PRIVATE NETWORK:` comment with the exact image path. Replace the public image with your internal mirror.
 
-**Docker base images** — every `FROM` line in the Dockerfiles has a `# PRIVATE NETWORK:` comment with the exact image path. Replace the public image with your internal mirror in that line.
-
-**npm packages** — in `apps/frontend/Dockerfile`, uncomment the `npm config set registry` and `pnpm config set registry` lines in each stage and set them to your Artifactory / Nexus npm proxy URL.
+**npm packages** — in `apps/frontend/Dockerfile`, uncomment the `npm config set registry` line and set it to your Artifactory / Nexus npm proxy URL.
 
 **pip packages** — in `apps/backend/Dockerfile`, uncomment the `--index-url` flag on the `pip install` line and set it to your internal PyPI proxy.
-
-**nginx image** — in `docker-compose.yml`, replace `nginx:1.27-alpine` with your internal mirror (`# PRIVATE NETWORK:` comment is on that line).

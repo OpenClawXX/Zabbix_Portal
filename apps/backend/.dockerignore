@@ -27,9 +27,5 @@ dist/
 # Documentation
 *.md
 
-# Secrets
-.env
-.env.*
-
 *.log
 .DS_Store

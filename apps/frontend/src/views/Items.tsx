@@ -1,87 +1,92 @@
+"use client";
 import {
+  Alert,
   Box,
   Button,
   Card,
   CardContent,
   Divider,
-  Alert,
   MenuItem,
   Snackbar,
   Stack,
   TextField,
   Typography,
-} from '@mui/material'
-import { useState } from 'react'
-import { api } from '../app/api'
+} from "@mui/material";
+import { useState } from "react";
+import { api } from "../app/api";
 
 const valueTypes = [
-  { value: 0, label: 'Float' },
-  { value: 1, label: 'String' },
-  { value: 2, label: 'Log' },
-  { value: 3, label: 'Integer' },
-  { value: 4, label: 'Text' },
-]
+  { value: 0, label: "Float" },
+  { value: 1, label: "String" },
+  { value: 2, label: "Log" },
+  { value: 3, label: "Integer" },
+  { value: 4, label: "Text" },
+];
 
 const operators = [
-  { value: '>', label: '>' },
-  { value: '<', label: '<' },
-  { value: '>=', label: '>=' },
-  { value: '<=', label: '<=' },
-  { value: '=', label: '=' },
-  { value: '<>', label: '<>' },
-]
+  { value: ">", label: ">" },
+  { value: "<", label: "<" },
+  { value: ">=", label: ">=" },
+  { value: "<=", label: "<=" },
+  { value: "=", label: "=" },
+  { value: "<>", label: "<>" },
+];
 
 const severities = [
-  { value: 0, label: 'Not classified' },
-  { value: 1, label: 'Information' },
-  { value: 2, label: 'Warning' },
-  { value: 3, label: 'Average' },
-  { value: 4, label: 'High' },
-  { value: 5, label: 'Disaster' },
-]
+  { value: 0, label: "Not classified" },
+  { value: 1, label: "Information" },
+  { value: 2, label: "Warning" },
+  { value: 3, label: "Average" },
+  { value: 4, label: "High" },
+  { value: 5, label: "Disaster" },
+];
 
-export function Items() {
-  const [hostname, setHostname] = useState('')
-  const [itemName, setItemName] = useState('')
-  const [itemKey, setItemKey] = useState('')
-  const [valueType, setValueType] = useState(3)
-  const [triggerHost, setTriggerHost] = useState('')
-  const [triggerItemKey, setTriggerItemKey] = useState('')
-  const [triggerName, setTriggerName] = useState('')
-  const [operator, setOperator] = useState('>')
-  const [threshold, setThreshold] = useState('')
-  const [severity, setSeverity] = useState(3)
-  const [toast, setToast] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
+export const Items = () => {
+  const [hostname, setHostname] = useState("");
+  const [itemName, setItemName] = useState("");
+  const [itemKey, setItemKey] = useState("");
+  const [valueType, setValueType] = useState(3);
+  const [triggerHost, setTriggerHost] = useState("");
+  const [triggerItemKey, setTriggerItemKey] = useState("");
+  const [triggerName, setTriggerName] = useState("");
+  const [operator, setOperator] = useState(">");
+  const [threshold, setThreshold] = useState("");
+  const [severity, setSeverity] = useState(3);
+  const [toast, setToast] = useState<{
+    open: boolean;
+    message: string;
+    severity: "success" | "error";
+  }>({
     open: false,
-    message: '',
-    severity: 'success',
-  })
+    message: "",
+    severity: "success",
+  });
 
-  async function onCreate() {
+  const onCreate = async () => {
     try {
       await api.addItem({
         hostname,
         item_name: itemName,
         item_key: itemKey,
         value_type: valueType,
-      })
-      setToast({ open: true, message: 'Item added successfully.', severity: 'success' })
-      setItemName('')
-      setItemKey('')
+      });
+      setToast({ open: true, message: "Item added successfully.", severity: "success" });
+      setItemName("");
+      setItemKey("");
     } catch (e) {
       setToast({
         open: true,
         message: e instanceof Error ? e.message : String(e),
-        severity: 'error',
-      })
+        severity: "error",
+      });
     }
-  }
+  };
 
-  async function onCreateTrigger() {
-    const parsedThreshold = Number(threshold)
+  const onCreateTrigger = async () => {
+    const parsedThreshold = Number(threshold);
     if (!Number.isFinite(parsedThreshold)) {
-      setToast({ open: true, message: 'Threshold must be a valid number.', severity: 'error' })
-      return
+      setToast({ open: true, message: "Threshold must be a valid number.", severity: "error" });
+      return;
     }
     try {
       await api.addTrigger({
@@ -91,18 +96,18 @@ export function Items() {
         operator,
         threshold: parsedThreshold,
         severity,
-      })
-      setToast({ open: true, message: 'Trigger added successfully.', severity: 'success' })
-      setTriggerName('')
-      setThreshold('')
+      });
+      setToast({ open: true, message: "Trigger added successfully.", severity: "success" });
+      setTriggerName("");
+      setThreshold("");
     } catch (e) {
       setToast({
         open: true,
         message: e instanceof Error ? e.message : String(e),
-        severity: 'error',
-      })
+        severity: "error",
+      });
     }
-  }
+  };
 
   return (
     <Stack spacing={3}>
@@ -123,9 +128,21 @@ export function Items() {
               Define the metric key and value type to attach a new check to an existing host.
             </Typography>
             <Divider />
-            <TextField label="Hostname" value={hostname} onChange={(e) => setHostname(e.target.value)} />
-            <TextField label="Item name" value={itemName} onChange={(e) => setItemName(e.target.value)} />
-            <TextField label="Item key" value={itemKey} onChange={(e) => setItemKey(e.target.value)} />
+            <TextField
+              label="Hostname"
+              value={hostname}
+              onChange={(e) => setHostname(e.target.value)}
+            />
+            <TextField
+              label="Item name"
+              value={itemName}
+              onChange={(e) => setItemName(e.target.value)}
+            />
+            <TextField
+              label="Item key"
+              value={itemKey}
+              onChange={(e) => setItemKey(e.target.value)}
+            />
             <TextField
               select
               label="Value type"
@@ -161,7 +178,11 @@ export function Items() {
               Create an alert rule on an existing item key (expression uses `.last()`).
             </Typography>
             <Divider />
-            <TextField label="Hostname" value={triggerHost} onChange={(e) => setTriggerHost(e.target.value)} />
+            <TextField
+              label="Hostname"
+              value={triggerHost}
+              onChange={(e) => setTriggerHost(e.target.value)}
+            />
             <TextField
               label="Item key"
               value={triggerItemKey}
@@ -173,7 +194,7 @@ export function Items() {
               value={triggerName}
               onChange={(e) => setTriggerName(e.target.value)}
             />
-            <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+            <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
               <TextField
                 select
                 label="Operator"
@@ -210,7 +231,9 @@ export function Items() {
               <Button
                 variant="contained"
                 onClick={onCreateTrigger}
-                disabled={!triggerHost || !triggerItemKey || !triggerName || threshold.trim() === ''}
+                disabled={
+                  !triggerHost || !triggerItemKey || !triggerName || threshold.trim() === ""
+                }
               >
                 Add trigger
               </Button>
@@ -222,18 +245,17 @@ export function Items() {
         open={toast.open}
         autoHideDuration={3000}
         onClose={() => setToast((t) => ({ ...t, open: false }))}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
       >
         <Alert
           onClose={() => setToast((t) => ({ ...t, open: false }))}
           severity={toast.severity}
           variant="filled"
-          sx={{ width: '100%' }}
+          sx={{ width: "100%" }}
         >
           {toast.message}
         </Alert>
       </Snackbar>
     </Stack>
-  )
-}
-
+  );
+};

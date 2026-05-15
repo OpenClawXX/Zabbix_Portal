@@ -57,7 +57,7 @@ frontend:
   apiProxy:
     enabled: true
   backendServiceName: ""
-  backendServicePort: 8000
+  backendServicePort: 6769
 
   ingress:
     enabled: true

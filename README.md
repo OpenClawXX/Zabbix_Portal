@@ -1,11 +1,11 @@
 # Zabbix Portal
 
-A full-stack DevOps UI for managing Zabbix hosts, items, and triggers — packaged as a Turborepo monorepo with first-class support for Kubernetes / OpenShift deployment via Helm + ArgoCD.
+A full-stack DevOps UI for managing Zabbix hosts, items, and triggers.
 
 - **Backend** — Python 3.12 / FastAPI (`apps/backend/`)
-- **Frontend** — React 18 / Vite / TypeScript / MUI (`apps/frontend/`)
+- **Frontend** — React 18 / Next.js 15 App Router / TypeScript / MUI (`apps/frontend/`)
 - **Filebeat** — Elastic log shipper, ships container logs to Elasticsearch (`apps/filebeat/`)
-- **Toolchain** — pnpm workspaces, Turborepo, Biome
+- **Toolchain** — npm, Biome
 - **Deployment** — Helm charts + ArgoCD ApplicationSet (staging / production / DR)
 
 > See [`CLAUDE.md`](./CLAUDE.md) for an architectural reference, [`WORKFLOW.md`](./WORKFLOW.md) for the end-to-end development and CI/CD flow, and [`RELEASING.md`](./RELEASING.md) for the release process.
@@ -14,7 +14,7 @@ A full-stack DevOps UI for managing Zabbix hosts, items, and triggers — packag
 
 ## Features
 
-- Health check for API / Zabbix connectivity
+- Health check for API / Zabbix connectivity with inline banners for backend/Zabbix errors
 - Create, list, delete hosts
 - Bulk-create hosts from `.csv` / `.xlsx`
 - Export host inventory to `.xlsx`
@@ -28,7 +28,7 @@ A full-stack DevOps UI for managing Zabbix hosts, items, and triggers — packag
 ```
 apps/
   backend/    FastAPI app (Python 3.12)
-  frontend/   React/Vite SPA (TypeScript)
+  frontend/   Next.js 15 App Router (TypeScript / MUI)
   filebeat/   Filebeat log shipper (Elastic 8.17)
 helm/
   charts/
@@ -37,12 +37,9 @@ helm/
     filebeat/       Filebeat DaemonSet chart
     zabbix-portal/  umbrella chart (depends on all three)
 argocd/             AppProject, Application, ApplicationSet, per-env values
-.gitlab/ci/         modular GitLab CI pipeline (common, detect, python, node, elastic, gitops, cleanup)
-turbo.json          Turborepo task pipeline
+.gitlab/ci/         modular GitLab CI pipeline
 biome.json          Biome (linter + formatter)
-pnpm-workspace.yaml pnpm workspace declaration
 .npmrc              Frozen-lockfile / private-registry config
-docker-compose.yml  Local stack (backend + frontend + Elasticsearch + Filebeat)
 ```
 
 ---
@@ -50,92 +47,83 @@ docker-compose.yml  Local stack (backend + frontend + Elasticsearch + Filebeat)
 ## Requirements
 
 - **Python** 3.12+
-- **Node.js** 22+ and **pnpm** 9.15+
-- **Docker** + Docker Compose for local containers
+- **Node.js** 22+
+- **Docker** for local containers
 - **Helm** 3.17+ and **kubectl** for cluster work
 - Access to a Zabbix server with API credentials
-
-Install pnpm if needed:
-
-```bash
-corepack enable && corepack prepare pnpm@9.15.4 --activate
-```
 
 ---
 
 ## Quick start (local development)
 
 ```bash
-# 1. Install all workspace dependencies
-pnpm install
+# 1. Configure backend env
+# Edit apps/backend/.env — set ZABBIX_URL, ZABBIX_USER, ZABBIX_PASS, BACKEND_URL
 
-# 2. Configure backend env (copy and edit)
-cp apps/backend/.env.example apps/backend/.env  # set ZABBIX_URL, ZABBIX_USER, ZABBIX_PASS
-
-# 3. Install backend Python deps
-cd apps/backend && python -m venv .venv && source .venv/bin/activate
+# 2. Install backend Python deps and start the backend (port 6769)
+cd apps/backend
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cd ../..
+uvicorn Zabbix_Main:app --host 0.0.0.0 --port 6769 --reload
 
-# 4. Start backend (port 6769)
-pnpm --filter @zabbix-portal/backend dev
-
-# 5. In another terminal, start frontend (port 42069)
-pnpm --filter @zabbix-portal/frontend dev
+# 3. In another terminal, install frontend deps and start the frontend (port 42069)
+cd apps/frontend
+npm install
+npm run dev
 ```
 
-Open <http://localhost:42069>. The frontend proxies `/api/*` to `http://localhost:6769` via `vite.config.ts`.
+Open <http://localhost:42069>. The frontend proxies `/api/*` to `http://localhost:6769` via the Next.js route handler at `src/app/api/[...path]/route.ts`.
 
-### `.env` for the backend
+### Environment files
 
-Place at `apps/backend/.env`:
+**`apps/backend/.env`** — required for both apps:
 
 ```
 ZABBIX_URL=http://your-zabbix-server
 ZABBIX_USER=Admin
 ZABBIX_PASS=zabbix
+BACKEND_URL=http://localhost:6769
 ```
 
-The URL accepts either a base URL or the full `…/api_jsonrpc.php` endpoint.
+`BACKEND_URL` tells the frontend route handler where to forward API requests. Use `http://localhost:6769` for local dev, `http://host.docker.internal:6769` for Mac/Windows Docker Desktop, or `http://backend:6769` when both containers are on the same Docker network.
+
+**`apps/frontend/.env`** — baked into the frontend Docker image:
+
+```
+BACKEND_URL=http://host.docker.internal:6769
+```
+
+Update this before building the frontend image when the backend address changes.
 
 ---
 
-## Available scripts (root)
+## Running with Docker
+
+Each app is built and run independently. There is no docker-compose.
 
 ```bash
-pnpm build       # turbo build across all workspaces
-pnpm dev         # turbo dev across all workspaces
-pnpm lint        # turbo lint (Biome on frontend, ruff on backend)
-pnpm typecheck   # turbo typecheck (tsc on frontend, mypy on backend)
-pnpm format      # biome format --write .
-pnpm check       # biome check --write .
-pnpm docker:build
-pnpm docker:up
-pnpm docker:down
+# Build images
+docker build -t zabbix-portal-backend apps/backend/
+docker build -t zabbix-portal-frontend apps/frontend/
+
+# Create a shared network so the frontend can reach the backend by name
+docker network create zabbix-net
+
+# Run backend
+docker run -d --name backend --network zabbix-net \
+  --env-file apps/backend/.env \
+  -p 6769:6769 \
+  zabbix-portal-backend
+
+# Run frontend
+docker run -d --name frontend --network zabbix-net \
+  -p 42069:42069 \
+  zabbix-portal-frontend
 ```
 
-Filter to a single app with `--filter`:
+Set `BACKEND_URL=http://backend:6769` in `apps/frontend/.env` before building when using the shared network above.
 
-```bash
-pnpm turbo build --filter=@zabbix-portal/frontend
-pnpm turbo lint  --filter=@zabbix-portal/backend
-```
-
----
-
-## Local Docker
-
-```bash
-docker compose up --build
-```
-
-- Backend → http://localhost:8000
-- Frontend → http://localhost:8080
-- Elasticsearch → http://localhost:9200
-
-The full stack includes Elasticsearch and Filebeat. Filebeat ships container logs to Elasticsearch automatically. Set `ELASTICSEARCH_PASSWORD` in the Filebeat service environment before starting if your cluster has auth enabled (it is disabled by default in the local compose file for convenience).
-
-The frontend is served by [`serve`](https://www.npmjs.com/package/serve) (no nginx) on port 8080. Inside the cluster, `/api/*` routing to the backend is handled by the Ingress (see `helm/charts/frontend/templates/ingress.yaml` — `apiProxy.enabled`).
+Open <http://localhost:42069>.
 
 ---
 
@@ -176,7 +164,6 @@ CSV or XLSX with columns:
 ### Helm
 
 ```bash
-# From repo root
 helm dependency build helm/charts/zabbix-portal/
 helm install zabbix-portal helm/charts/zabbix-portal/ \
   --namespace zabbix-portal --create-namespace
@@ -189,7 +176,7 @@ kubectl apply -f argocd/appproject.yaml
 kubectl apply -f argocd/applicationset.yaml   # generates one Application per env
 ```
 
-The ApplicationSet creates `zabbix-portal-dev`, `zabbix-portal-staging`, and `zabbix-portal-production` Applications with environment-specific overrides.
+The ApplicationSet creates `zabbix-portal-dev`, `zabbix-portal-staging`, and `zabbix-portal-production` Applications with environment-specific overrides. In-cluster, the Ingress routes `/api/*` to the backend service directly — the frontend route handler's `BACKEND_URL` is not used.
 
 ---
 
@@ -197,11 +184,10 @@ The ApplicationSet creates `zabbix-portal-dev`, `zabbix-portal-staging`, and `za
 
 This project is designed to run in air-gapped or private-registry environments:
 
-- All `FROM` lines in Dockerfiles have `# PRIVATE NETWORK:` comments showing the exact image and replacement format — including the Filebeat base image (`docker.elastic.co/beats/filebeat:8.17.0`).
-- The Elasticsearch URL in `apps/filebeat/filebeat.yml`, `helm/charts/filebeat/values.yaml`, and `docker-compose.yml` all have `# PRIVATE NETWORK:` comments for the internal cluster address.
+- All `FROM` lines in Dockerfiles have `# PRIVATE NETWORK:` comments showing the exact image and replacement format.
 - npm packages are pinned to **exact versions** (no `^` or `~`) and `.npmrc` enforces `frozen-lockfile=true`.
-- The frontend container uses **`serve` instead of nginx** so it works under OpenShift's `restricted` SCC (non-root, port 8080, random UID + GID 0).
-- The Filebeat DaemonSet requires the `hostmount-anyuid` SCC on OpenShift to mount host log paths — see `helm/charts/filebeat/values.yaml` for the exact `oc adm policy` command.
+- The frontend container runs as a **Next.js standalone server** (`node server.js`) on port 42069 — no nginx, works under OpenShift's `restricted` SCC (non-root, random UID + GID 0).
+- The Filebeat DaemonSet requires the `hostmount-anyuid` SCC on OpenShift to mount host log paths.
 
 See [`CLAUDE.md`](./CLAUDE.md) for the full set of private-network considerations.
 

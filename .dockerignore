@@ -52,10 +52,6 @@ coverage/
 htmlcov/
 .nyc_output/
 
-# Secrets
-.env
-.env.*
-
 *.log
 .DS_Store
 Thumbs.db

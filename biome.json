@@ -10,7 +10,7 @@
     "ignore": [
       "**/dist/**",
       "**/node_modules/**",
-      "**/.turbo/**",
+      "**/.next/**",
       "**/build/**"
     ]
   },

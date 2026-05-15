@@ -1,61 +1,75 @@
-import { useEffect, useMemo, useState } from 'react'
-import type { PropsWithChildren, ReactNode } from 'react'
-import { Chip, Box, Divider, Drawer, IconButton, List, ListItemButton, ListItemIcon, ListItemText, Typography } from '@mui/material'
-import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined'
-import ComputerOutlinedIcon from '@mui/icons-material/ComputerOutlined'
-import PlaylistAddOutlinedIcon from '@mui/icons-material/PlaylistAddOutlined'
-import MenuIcon from '@mui/icons-material/Menu'
-import { Link, useLocation } from 'react-router-dom'
-import { api } from '../api'
+"use client";
+import ComputerOutlinedIcon from "@mui/icons-material/ComputerOutlined";
+import DashboardOutlinedIcon from "@mui/icons-material/DashboardOutlined";
+import MenuIcon from "@mui/icons-material/Menu";
+import PlaylistAddOutlinedIcon from "@mui/icons-material/PlaylistAddOutlined";
+import {
+  Alert,
+  Box,
+  Chip,
+  Divider,
+  Drawer,
+  IconButton,
+  List,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
+  Typography,
+} from "@mui/material";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import type { PropsWithChildren, ReactNode } from "react";
+import { api } from "../api";
 
-const drawerWidth = 260
+const drawerWidth = 260;
 
 type NavItem = {
-  to: string
-  label: string
-  icon: ReactNode
-}
+  href: string;
+  label: string;
+  icon: ReactNode;
+};
 
 const navItems: NavItem[] = [
-  { to: '/', label: 'Overview', icon: <DashboardOutlinedIcon /> },
-  { to: '/hosts', label: 'Hosts', icon: <ComputerOutlinedIcon /> },
-  { to: '/items', label: 'Items', icon: <PlaylistAddOutlinedIcon /> },
-]
+  { href: "/", label: "Overview", icon: <DashboardOutlinedIcon /> },
+  { href: "/hosts", label: "Hosts", icon: <ComputerOutlinedIcon /> },
+  { href: "/items", label: "Items", icon: <PlaylistAddOutlinedIcon /> },
+];
 
-export function AppShell({ children }: PropsWithChildren) {
-  const location = useLocation()
-  const [mobileOpen, setMobileOpen] = useState(false)
-  const [health, setHealth] = useState<{ ok: boolean; zabbix: boolean } | null>(null)
-  const [loadingHealth, setLoadingHealth] = useState(false)
+export const AppShell = ({ children }: PropsWithChildren) => {
+  const pathname = usePathname();
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [health, setHealth] = useState<{ ok: boolean; zabbix: boolean } | null>(null);
+  const [loadingHealth, setLoadingHealth] = useState(false);
 
   const pageTitle = useMemo(
-    () => navItems.find((n) => n.to === location.pathname)?.label ?? 'Zabbix DevOps',
-    [location.pathname],
-  )
+    () => navItems.find((n) => n.href === pathname)?.label ?? "Zabbix DevOps",
+    [pathname],
+  );
 
   useEffect(() => {
-    let cancelled = false
-    async function load() {
-      setLoadingHealth(true)
+    let cancelled = false;
+    const load = async () => {
+      setLoadingHealth(true);
       try {
-        const h = await api.health()
-        if (!cancelled) setHealth({ ok: h.status === 'online', zabbix: !!h.zabbix_connected })
+        const h = await api.health();
+        if (!cancelled) setHealth({ ok: h.status === "online", zabbix: !!h.zabbix_connected });
       } catch {
-        if (!cancelled) setHealth({ ok: false, zabbix: false })
+        if (!cancelled) setHealth({ ok: false, zabbix: false });
       } finally {
-        if (!cancelled) setLoadingHealth(false)
+        if (!cancelled) setLoadingHealth(false);
       }
-    }
-    load()
-    const t = window.setInterval(load, 10_000)
+    };
+    void load();
+    const t = window.setInterval(load, 10_000);
     return () => {
-      cancelled = true
-      window.clearInterval(t)
-    }
-  }, [])
+      cancelled = true;
+      window.clearInterval(t);
+    };
+  }, []);
 
   const drawer = (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
       <Box sx={{ p: 2 }}>
         <Typography variant="h6" sx={{ fontWeight: 800, letterSpacing: 0.2 }}>
           Zabbix DevOps
@@ -67,36 +81,36 @@ export function AppShell({ children }: PropsWithChildren) {
       <Divider />
       <List sx={{ px: 1, pt: 1 }}>
         {navItems.map((item) => {
-          const selected = location.pathname === item.to
+          const selected = pathname === item.href;
           return (
             <ListItemButton
-              key={item.to}
+              key={item.href}
               component={Link}
-              to={item.to}
+              href={item.href}
               selected={selected}
               sx={{
                 borderRadius: 3,
                 mb: 0.75,
-                backgroundColor: selected ? 'rgba(15,23,42,0.82)' : 'transparent',
-                border: '1px solid',
-                borderColor: selected ? 'rgba(34,211,238,0.42)' : 'transparent',
-                '&:hover': {
-                  backgroundColor: 'rgba(51,65,85,0.65)',
+                backgroundColor: selected ? "rgba(15,23,42,0.82)" : "transparent",
+                border: "1px solid",
+                borderColor: selected ? "rgba(34,211,238,0.42)" : "transparent",
+                "&:hover": {
+                  backgroundColor: "rgba(51,65,85,0.65)",
                 },
               }}
             >
               <ListItemIcon sx={{ minWidth: 40 }}>{item.icon}</ListItemIcon>
               <ListItemText primary={item.label} />
             </ListItemButton>
-          )
+          );
         })}
       </List>
       <Box sx={{ flex: 1 }} />
     </Box>
-  )
+  );
 
   return (
-    <Box sx={{ display: 'flex', minHeight: '100%' }}>
+    <Box sx={{ display: "flex", minHeight: "100%" }}>
       <Box component="nav" sx={{ width: { md: drawerWidth }, flexShrink: { md: 0 } }}>
         <Drawer
           variant="temporary"
@@ -104,8 +118,8 @@ export function AppShell({ children }: PropsWithChildren) {
           onClose={() => setMobileOpen(false)}
           ModalProps={{ keepMounted: true }}
           sx={{
-            display: { xs: 'block', md: 'none' },
-            '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
+            display: { xs: "block", md: "none" },
+            "& .MuiDrawer-paper": { boxSizing: "border-box", width: drawerWidth },
           }}
         >
           {drawer}
@@ -113,13 +127,13 @@ export function AppShell({ children }: PropsWithChildren) {
         <Drawer
           variant="permanent"
           sx={{
-            display: { xs: 'none', md: 'block' },
-            '& .MuiDrawer-paper': {
-              boxSizing: 'border-box',
+            display: { xs: "none", md: "block" },
+            "& .MuiDrawer-paper": {
+              boxSizing: "border-box",
               width: drawerWidth,
-              borderRight: '1px solid rgba(255,255,255,0.1)',
-              backgroundColor: 'rgba(15, 23, 42, 0.72)',
-              backdropFilter: 'blur(12px)',
+              borderRight: "1px solid rgba(255,255,255,0.1)",
+              backgroundColor: "rgba(15, 23, 42, 0.72)",
+              backdropFilter: "blur(12px)",
             },
           }}
           open
@@ -138,7 +152,7 @@ export function AppShell({ children }: PropsWithChildren) {
           pb: 4,
         }}
       >
-        <Box sx={{ display: { xs: 'flex', md: 'none' }, alignItems: 'center', mb: 2 }}>
+        <Box sx={{ display: { xs: "flex", md: "none" }, alignItems: "center", mb: 2 }}>
           <IconButton
             color="inherit"
             edge="start"
@@ -159,14 +173,25 @@ export function AppShell({ children }: PropsWithChildren) {
             <Chip
               size="small"
               variant="outlined"
-              label={health?.ok && health?.zabbix ? 'Healthy' : 'Check status'}
-              color={health?.ok && health?.zabbix ? 'success' : 'warning'}
+              label={health?.ok && health?.zabbix ? "Healthy" : "Check status"}
+              color={health?.ok && health?.zabbix ? "success" : "warning"}
             />
           )}
         </Box>
+        {!loadingHealth && health !== null && !health.ok && (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            Cannot reach the backend — API calls will fail. Check that the backend is running and
+            reachable.
+          </Alert>
+        )}
+        {!loadingHealth && health !== null && health.ok && !health.zabbix && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            Backend is up but cannot connect to Zabbix. Check ZABBIX_URL / credentials in the
+            backend environment.
+          </Alert>
+        )}
         {children}
       </Box>
     </Box>
-  )
-}
-
+  );
+};

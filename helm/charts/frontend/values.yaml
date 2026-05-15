@@ -25,7 +25,7 @@ podSecurityContext:
   fsGroup: 0
   runAsNonRoot: true
 
-# No NET_BIND_SERVICE needed — serve runs on port 8080 (unprivileged).
+# No NET_BIND_SERVICE needed — next start runs on port 42069 (unprivileged).
 securityContext:
   allowPrivilegeEscalation: false
   capabilities:
@@ -37,7 +37,7 @@ securityContext:
 
 service:
   type: ClusterIP
-  port: 8080
+  port: 42069
 
 ingress:
   enabled: false
@@ -53,7 +53,7 @@ ingress:
 # The backend service name and port used when apiProxy.enabled is true.
 # backendServiceName defaults to <release-name>-backend when left empty.
 backendServiceName: ""
-backendServicePort: 8000
+backendServicePort: 6769
 
 # When enabled, the Ingress will include a second path rule that routes
 # /api/* to the backend service (path rewritten to strip /api/).
@@ -78,7 +78,7 @@ autoscaling:
 livenessProbe:
   httpGet:
     path: /
-    port: 8080
+    port: 42069
   initialDelaySeconds: 10
   periodSeconds: 20
   timeoutSeconds: 5
@@ -87,7 +87,7 @@ livenessProbe:
 readinessProbe:
   httpGet:
     path: /
-    port: 8080
+    port: 42069
   initialDelaySeconds: 5
   periodSeconds: 10
   timeoutSeconds: 5

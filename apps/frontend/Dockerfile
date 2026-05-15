@@ -1,84 +1,57 @@
 # =============================================================================
 # PRIVATE NETWORK — IMAGE CHANGES REQUIRED
 # =============================================================================
-# This file uses ONE public image (node) across all stages.
-# Replace it with your internal mirror before building.
+# Replace the public image with your internal mirror before building.
 #
-#  Stage              | Public image                 | Replace with
-#  ------------------ | ---------------------------- | -------------------------
-#  base/pruner/       |                              |
-#  installer/builder  | node:22.11.0-alpine3.20      | <registry>/docker-virtual/node:22.11.0-alpine3.20
-#  runner             | node:22.11.0-alpine3.20      | <registry>/docker-virtual/node:22.11.0-alpine3.20
+#  Stage    | Public image            | Replace with
+#  -------- | ----------------------- | ------------------------------------------
+#  builder  | node:22.11.0-alpine3.20 | <registry>/docker-virtual/node:22.11.0-alpine3.20
+#  runner   | node:22.11.0-alpine3.20 | <registry>/docker-virtual/node:22.11.0-alpine3.20
 #
-# No nginx — using Node.js `serve@14.2.4` instead.
-# `serve` is OpenShift-compatible: runs as non-root on port 8080.
+# Build context: apps/frontend/
+#   docker build -t zabbix-portal-frontend apps/frontend/
 # =============================================================================
 
+# ── Build ─────────────────────────────────────────────────────────────────────
 # PRIVATE NETWORK: change to <your-registry>/docker-virtual/node:22.11.0-alpine3.20
-FROM node:22.11.0-alpine3.20 AS base
-# Install pnpm directly — avoids corepack's internet download on first use.
-# PRIVATE NETWORK: uncomment the two lines below to set your npm registry and disable SSL verification:
+FROM node:22.11.0-alpine3.20 AS builder
+
+WORKDIR /app
+
+# PRIVATE NETWORK: uncomment to point at your internal npm registry:
 # RUN npm config set registry https://<your-registry>/api/npm/npm/ \
 #     && npm config set strict-ssl false
-RUN npm install -g pnpm@9.15.4
 
-# ── Prune workspace to only what this app needs ──────────────────────────────
-FROM base AS pruner
-WORKDIR /app
-# PRIVATE NETWORK: npm registry/SSL config is inherited from base above.
-# If turbo is not yet cached in your proxy, install it with --registry explicitly:
-# RUN npm install -g turbo@2.3.3 --registry https://<your-registry>/api/npm/npm/
-RUN npm install -g turbo@2.3.3
+COPY package.json ./
+RUN npm install
+
 COPY . .
-RUN turbo prune --scope=@zabbix-portal/frontend --docker
 
-# ── Install dependencies from pruned lockfile ────────────────────────────────
-FROM base AS installer
-WORKDIR /app
-COPY --from=pruner /app/out/json/ .
-COPY --from=pruner /app/out/pnpm-lock.yaml ./pnpm-lock.yaml
-# PRIVATE NETWORK: uncomment to set pnpm registry and disable SSL verification:
-# RUN pnpm config set registry https://<your-registry>/api/npm/npm/ \
-#     && pnpm config set strict-ssl false
-RUN pnpm install --frozen-lockfile
+ENV NEXT_TELEMETRY_DISABLED=1
 
-# ── Build the frontend ────────────────────────────────────────────────────────
-FROM base AS builder
-WORKDIR /app
-# Copy the full installer tree (root + all workspace node_modules) then overlay source.
-# Copying only /app/node_modules misses workspace-level node_modules (e.g. apps/frontend/node_modules).
-COPY --from=installer /app .
-COPY --from=pruner /app/out/full/ .
-RUN pnpm turbo build --filter=@zabbix-portal/frontend
+RUN npm run build
 
-# ── Runtime — OpenShift-compatible static file server ────────────────────────
-# Using `serve` instead of nginx:
-#   - Runs entirely as non-root (no CAP_NET_BIND_SERVICE, no port 80)
-#   - Port 8080: OpenShift convention for unprivileged web apps
-#   - OpenShift assigns a random UID at runtime but always GID 0 (root group).
-#     Files are chowned 1001:0 + chmod g=u so any UID in group 0 can read them.
-#   - /api/ proxying is handled at the Ingress/Route level, not in this container.
-#
+# ── Runtime ───────────────────────────────────────────────────────────────────
 # PRIVATE NETWORK: change to <your-registry>/docker-virtual/node:22.11.0-alpine3.20
 FROM node:22.11.0-alpine3.20 AS runner
 
-# PRIVATE NETWORK: uncomment to set npm registry and disable SSL verification:
-# RUN npm config set registry https://<your-registry>/api/npm/npm/ \
-#     && npm config set strict-ssl false
-RUN npm install -g serve@14.2.4
+WORKDIR /app
 
-# Prepare a writable app directory owned by 1001 with group-write for OpenShift
-RUN mkdir -p /app/dist \
-    && chown -R 1001:0 /app \
-    && chmod -R g=u /app
+ENV NODE_ENV=production
+ENV PORT=42069
+ENV HOSTNAME=0.0.0.0
+ENV NEXT_TELEMETRY_DISABLED=1
 
-COPY --from=builder --chown=1001:0 /app/apps/frontend/dist /app/dist
+RUN addgroup -g 1001 -S nodejs \
+    && adduser -S nextjs -u 1001 -G nodejs
 
-# Non-root user; OpenShift may override the UID but will keep GID 0
-USER 1001
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/.env ./.env
 
-EXPOSE 8080
+USER nextjs
 
-# -s  single-page app mode: unknown paths return index.html (replaces nginx try_files)
-# -l  listen port
-CMD ["serve", "-s", "/app/dist", "-l", "8080"]
+EXPOSE 42069
+
+CMD ["node", "server.js"]
