@@ -42,15 +42,7 @@ BACKEND_IMAGE_NAME=backend
 FRONTEND_IMAGE_NAME=frontend
 
 
-# ─── 4. PNPM WORKSPACE PACKAGES ──────────────────────────────────────────────
-# Must match the "name" field in each app's package.json. Used by `turbo
-# --filter` in the lint/typecheck/build jobs.
-
-BACKEND_PACKAGE=@zabbix-portal/backend
-FRONTEND_PACKAGE=@zabbix-portal/frontend
-
-
-# ─── 5. HELM ─────────────────────────────────────────────────────────────────
+# ─── 4. HELM ─────────────────────────────────────────────────────────────────
 # HELM_CHART_PATH = path to the umbrella chart that CI installs/syncs.
 # *_HELM_KEY      = sub-chart keys as referenced by the umbrella chart's
 #                    values.yaml. These are what `argocd app set --helm-set
@@ -107,7 +99,6 @@ PRODUCTION_URL=https://zabbix-portal.example.com
 # Pinning these here makes pipeline reruns reproducible and signals to
 # private-network admins exactly which images need to be mirrored.
 
-PNPM_VERSION=9.15.4
 NODE_VERSION=22
 PYTHON_VERSION=3.12
 HELM_VERSION=3.17.0
@@ -133,4 +124,6 @@ ARGOCD_CLI_VERSION=v2.14.0
 # kubectl -n $K8S_NAMESPACE create secret generic zabbix-portal-backend-secret \
 #   --from-literal=ZABBIX_URL=https://your-zabbix-server \
 #   --from-literal=ZABBIX_USER=Admin \
-#   --from-literal=ZABBIX_PASS=<password>
+#   --from-literal=ZABBIX_PASS=<password> \
+#   --from-literal=SECRET_KEY=<long-random-string> \
+#   --from-literal=DATABASE_URL=postgresql://user:password@host:5432/zabbix_portal

@@ -1,8 +1,8 @@
 # =============================================================================
-# Frontend (Node.js / Turborepo / pnpm / Biome) pipeline.
+# Frontend (Node.js / npm / Biome) pipeline.
 # =============================================================================
 # Runs only on tag pushes (see common.yml .rules_release).
-# Each job is additionally gated by detect.yml.
+# Each job is additionally gated by detect.yml FRONTEND_CHANGED flag.
 # =============================================================================
 
 .frontend_base:
@@ -12,24 +12,21 @@
     - job: detect
       artifacts: true
   before_script:
-    - corepack enable
-    - corepack prepare pnpm@${PNPM_VERSION} --activate
-    - pnpm install --frozen-lockfile
+    - cd $FRONTEND_PATH
+    - npm ci
   cache:
     key:
       files:
-        - pnpm-lock.yaml
+        - $FRONTEND_PATH/package-lock.json
     paths:
-      - node_modules/
       - $FRONTEND_PATH/node_modules/
-      - .turbo/
 
 # ── Lint (Biome) ──────────────────────────────────────────────────────────────
 frontend:lint:
   extends: .frontend_base
   stage: lint
   script:
-    - pnpm turbo lint --filter="$FRONTEND_PACKAGE"
+    - npm run lint
   rules:
     - if: $CI_COMMIT_TAG && $FRONTEND_CHANGED == "1"
 
@@ -38,13 +35,14 @@ frontend:typecheck:
   extends: .frontend_base
   stage: lint
   script:
-    - pnpm turbo typecheck --filter="$FRONTEND_PACKAGE"
+    - npm run typecheck
   rules:
     - if: $CI_COMMIT_TAG && $FRONTEND_CHANGED == "1"
 
-# ── Build (Turborepo cached) ──────────────────────────────────────────────────
-frontend:build:
-  extends: .frontend_base
+# ── Build & push Docker image ─────────────────────────────────────────────────
+# The Dockerfile runs npm ci + next build internally — no pre-build step needed.
+frontend:docker:build:
+  extends: .docker_base
   stage: build
   needs:
     - job: detect
@@ -52,24 +50,6 @@ frontend:build:
     - job: frontend:lint
       optional: true
     - job: frontend:typecheck
-      optional: true
-  script:
-    - pnpm turbo build --filter="$FRONTEND_PACKAGE"
-  artifacts:
-    paths:
-      - $FRONTEND_PATH/dist/
-    expire_in: 1 week
-  rules:
-    - if: $CI_COMMIT_TAG && $FRONTEND_CHANGED == "1"
-
-# ── Build & push Docker image ─────────────────────────────────────────────────
-frontend:docker:build:
-  extends: .docker_base
-  stage: build
-  needs:
-    - job: detect
-      artifacts: true
-    - job: frontend:build
       optional: true
   script:
     - |

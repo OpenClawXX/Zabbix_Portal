@@ -39,17 +39,11 @@ variables:
   FILEBEAT_IMAGE: $CI_REGISTRY_IMAGE/$FILEBEAT_IMAGE_NAME
   POSTGRES_IMAGE: $CI_REGISTRY_IMAGE/$POSTGRES_IMAGE_NAME
 
-  # ── pnpm workspace package names ────────────────────────────────────────────
-  # Used by turbo --filter. Must match the "name" field in each app's package.json.
-  # PROJECT-SPECIFIC: update to @<your-project>/backend and @<your-project>/frontend.
-  BACKEND_PACKAGE: "@zabbix-portal/backend"
-  FRONTEND_PACKAGE: "@zabbix-portal/frontend"
-
   # ── Root workspace config files that invalidate the frontend build ──────────
   # detect.yml uses this regex to mark FRONTEND_CHANGED=1 when any of these
   # files change at the repo root. Update if you switch package managers or
-  # build tools (e.g. replace pnpm-lock.yaml with yarn.lock for a Yarn project).
-  ROOT_JS_CONFIGS: "package\\.json|pnpm-workspace\\.yaml|pnpm-lock\\.yaml|turbo\\.json|biome\\.json|\\.npmrc"
+  # build tools.
+  ROOT_JS_CONFIGS: "package\\.json|package-lock\\.json|biome\\.json|\\.npmrc"
 
   # ── Helm ────────────────────────────────────────────────────────────────────
   # HELM_CHART_PATH must match the umbrella chart directory name under helm/charts/.
@@ -82,7 +76,6 @@ variables:
   DR_URL: "https://dr.${PROJECT_NAME}.${PROD_DOMAIN}"
 
   # ── Tooling versions ────────────────────────────────────────────────────────
-  PNPM_VERSION: "9.15.4"
   NODE_VERSION: "22"
   PYTHON_VERSION: "3.12"
   HELM_VERSION: "3.17.0"
