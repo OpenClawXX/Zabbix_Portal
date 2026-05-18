@@ -5,3 +5,6 @@ pandas
 openpyxl
 python-dotenv
 python-multipart
+psycopg2-binary
+bcrypt
+python-jose[cryptography]

@@ -99,3 +99,63 @@ class Item_Manager(Zabbix_Base):
         except Exception as e:
             print(f"❌ Trigger Creation Failed: {repr(e)}")
             return None
+
+    def list_items(self, hostname: str) -> list[dict]:
+        """List all non-inherited items on a host."""
+        if not self.zapi:
+            return []
+        try:
+            host_data = self.zapi.host.get(filter={"host": [hostname]}, output=["hostid"])
+            if not host_data:
+                return []
+            items = self.zapi.item.get(
+                hostids=host_data[0]["hostid"],
+                output=["itemid", "name", "key_", "value_type", "delay"],
+                inherited=False,
+            )
+            return items
+        except Exception as e:
+            print(f"❌ list_items failed: {repr(e)}")
+            return []
+
+    def delete_item(self, itemid: str) -> bool:
+        """Delete an item by ID."""
+        if not self.zapi:
+            return False
+        try:
+            self.zapi.item.delete([itemid])
+            print(f"🗑️ Deleted item ID {itemid}")
+            return True
+        except Exception as e:
+            print(f"❌ delete_item failed: {repr(e)}")
+            return False
+
+    def list_triggers(self, hostname: str) -> list[dict]:
+        """List all non-inherited triggers on a host."""
+        if not self.zapi:
+            return []
+        try:
+            host_data = self.zapi.host.get(filter={"host": [hostname]}, output=["hostid"])
+            if not host_data:
+                return []
+            triggers = self.zapi.trigger.get(
+                hostids=host_data[0]["hostid"],
+                output=["triggerid", "description", "expression", "priority", "status"],
+                inherited=False,
+            )
+            return triggers
+        except Exception as e:
+            print(f"❌ list_triggers failed: {repr(e)}")
+            return []
+
+    def delete_trigger(self, triggerid: str) -> bool:
+        """Delete a trigger by ID."""
+        if not self.zapi:
+            return False
+        try:
+            self.zapi.trigger.delete([triggerid])
+            print(f"🗑️ Deleted trigger ID {triggerid}")
+            return True
+        except Exception as e:
+            print(f"❌ delete_trigger failed: {repr(e)}")
+            return False

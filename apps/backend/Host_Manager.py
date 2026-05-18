@@ -145,20 +145,62 @@ class Host_Manager(Zabbix_Base):
             print(f"❌ Failed to delete host '{hostname}': {repr(e)}")
             return False
 
-    def get_hosts(self):
-        """Retrieves all hosts from Zabbix. Returns a list of dicts."""
+    def get_hosts(self, team_name: str | None = None):
+        """Retrieves hosts from Zabbix. Pass team_name to filter by the 'team' tag."""
         if not self.zapi:
             return []
 
         try:
-            hosts = self.zapi.host.get(
-                output=["hostid", "host", "name", "status"]
-            )
+            kwargs: dict = {"output": ["hostid", "host", "name", "status"]}
+            if team_name:
+                kwargs["tags"] = [{"tag": "team", "value": team_name, "operator": 1}]
+            hosts = self.zapi.host.get(**kwargs)
             print(f"✅ Retrieved {len(hosts)} hosts.")
             return hosts
         except Exception as e:
             print(f"❌ Failed to retrieve hosts: {repr(e)}")
             return []
+
+    def tag_host(self, hostname: str, team_name: str) -> bool:
+        """Add/replace the 'team' tag on a host, preserving all other tags."""
+        if not self.zapi:
+            return False
+        try:
+            host_data = self.zapi.host.get(
+                filter={"host": hostname},
+                output=["hostid"],
+                selectTags="extend",
+            )
+            if not host_data:
+                return False
+            host = host_data[0]
+            tags = [t for t in host.get("tags", []) if t.get("tag") != "team"]
+            tags.append({"tag": "team", "value": team_name})
+            self.zapi.host.update(hostid=host["hostid"], tags=tags)
+            return True
+        except Exception as e:
+            print(f"❌ Failed to tag host '{hostname}': {repr(e)}")
+            return False
+
+    def untag_host(self, hostname: str) -> bool:
+        """Remove the 'team' tag from a host, preserving all other tags."""
+        if not self.zapi:
+            return False
+        try:
+            host_data = self.zapi.host.get(
+                filter={"host": hostname},
+                output=["hostid"],
+                selectTags="extend",
+            )
+            if not host_data:
+                return False
+            host = host_data[0]
+            tags = [t for t in host.get("tags", []) if t.get("tag") != "team"]
+            self.zapi.host.update(hostid=host["hostid"], tags=tags)
+            return True
+        except Exception as e:
+            print(f"❌ Failed to untag host '{hostname}': {repr(e)}")
+            return False
 
     def export_hosts_to_excel(self, file_path="zabbix_inventory.xlsx"):
         """Fetches all hosts and writes them to an Excel (.xlsx) file."""

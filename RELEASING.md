@@ -16,7 +16,7 @@ If you only want to understand what the pipeline does, read [`WORKFLOW.md`](./WO
 | Roll production back                    | `argocd app set` to a previous tag (see §6).             |
 | Hotfix production                       | Branch from the production tag → tag a new patch.        |
 | Bump only the Helm chart                | Tag a release — only `helm/` changed since the last tag. |
-| Validate locally before tagging         | `pnpm turbo lint typecheck` + `helm lint helm/charts/*`. |
+| Validate locally before tagging         | `npm run lint && npm run typecheck` (frontend) + `ruff check . && mypy .` (backend) + `helm lint helm/charts/*`. |
 
 ---
 
@@ -59,7 +59,8 @@ git checkout -b feature/<short-description>
 # ...edit code...
 
 # Validate locally — same checks CI runs (when it eventually does)
-pnpm turbo lint typecheck
+cd apps/frontend && npm run lint && npm run typecheck
+cd apps/backend  && ruff check . && mypy . --ignore-missing-imports
 helm lint helm/charts/{backend,frontend,zabbix-portal}    # if you touched Helm
 
 git commit -am "feat: <subject>"
@@ -81,29 +82,19 @@ git checkout main && git pull
 # Annotated tag with a release note
 git tag -a v1.4.0 -m "Release 1.4.0 — <one-line summary>"
 
+
 # Push the tag — this is what fires CI
 git push origin v1.4.0
 ```
 
-#### Option B — interactive bump from the workspace
-
-The pipeline doesn't care *how* the tag was produced. Any tool that ends with `git push origin <tag>` works:
+#### Option B — npm version
 
 ```bash
-# Example: Changesets (the canonical Turborepo versioning tool)
-pnpm changeset                  # interactively record what changed
-pnpm changeset version          # bumps versions in package.json files
-git add . && git commit -m "chore: release v1.4.0"
-pnpm changeset tag              # creates the tag(s)
-git push origin main --follow-tags
-
-# Example: pnpm version (single workspace bump)
-pnpm version 1.4.0 -m "chore: release v%s" && git push --follow-tags
-
-# Example: bumpp / release-it / lerna version — all valid
+# From apps/frontend/ or the repo root
+npm version 1.4.0 -m "chore: release v%s" && git push --follow-tags
 ```
 
-Whatever you pick, the moment a tag lands on the remote, CI starts.
+Whatever tool you use, the moment a tag lands on the remote, CI starts.
 
 ### 2.3 What CI does on the tag
 
@@ -186,7 +177,8 @@ git checkout v1.4.0
 git checkout -b hotfix/v1.4.1
 
 # ...minimal fix...
-pnpm turbo lint typecheck
+cd apps/frontend && npm run lint && npm run typecheck
+cd apps/backend  && ruff check . && mypy . --ignore-missing-imports
 
 git commit -am "fix: <subject>"
 git push -u origin hotfix/v1.4.1
@@ -255,7 +247,8 @@ Re-run the previous tag's pipeline, or simply tag a new patch release that rever
 ## 7. Pre-flight checklist before tagging
 
 - [ ] Code merged to `main` and the tip of `main` builds locally
-- [ ] `pnpm turbo lint typecheck` passes locally
+- [ ] `npm run lint && npm run typecheck` passes in `apps/frontend/`
+- [ ] `ruff check . && mypy . --ignore-missing-imports` passes in `apps/backend/`
 - [ ] `helm lint helm/charts/{backend,frontend,zabbix-portal}` passes
 - [ ] `Chart.yaml` `version:` and `appVersion:` are bumped
 - [ ] Any new Helm values are documented in `helm/charts/zabbix-portal/values.yaml` with comments

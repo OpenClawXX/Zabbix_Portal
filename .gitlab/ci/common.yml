@@ -24,6 +24,7 @@ variables:
   BACKEND_PATH: apps/backend
   FRONTEND_PATH: apps/frontend
   FILEBEAT_PATH: apps/filebeat
+  POSTGRES_PATH: apps/postgres
   HELM_PATH: helm/charts
 
   # ── Container images ────────────────────────────────────────────────────────
@@ -32,9 +33,11 @@ variables:
   BACKEND_IMAGE_NAME: backend
   FRONTEND_IMAGE_NAME: frontend
   FILEBEAT_IMAGE_NAME: filebeat
+  POSTGRES_IMAGE_NAME: postgres
   BACKEND_IMAGE: $CI_REGISTRY_IMAGE/$BACKEND_IMAGE_NAME
   FRONTEND_IMAGE: $CI_REGISTRY_IMAGE/$FRONTEND_IMAGE_NAME
   FILEBEAT_IMAGE: $CI_REGISTRY_IMAGE/$FILEBEAT_IMAGE_NAME
+  POSTGRES_IMAGE: $CI_REGISTRY_IMAGE/$POSTGRES_IMAGE_NAME
 
   # ── pnpm workspace package names ────────────────────────────────────────────
   # Used by turbo --filter. Must match the "name" field in each app's package.json.
@@ -57,6 +60,7 @@ variables:
   BACKEND_HELM_KEY: backend
   FRONTEND_HELM_KEY: frontend
   FILEBEAT_HELM_KEY: filebeat
+  POSTGRES_HELM_KEY: postgres
 
   # ── Kubernetes ──────────────────────────────────────────────────────────────
   K8S_NAMESPACE: "${PROJECT_NAME}"

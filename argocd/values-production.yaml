@@ -127,3 +127,27 @@ frontend:
                 values:
                   - frontend  # matches the sub-chart name (Chart.yaml name: frontend)
           topologyKey: kubernetes.io/hostname
+
+postgres:
+  image:
+    repository: your-registry/postgres
+    tag: "16"
+    pullPolicy: IfNotPresent
+
+  auth:
+    # PROJECT-SPECIFIC: create before deploying:
+    #   kubectl create secret generic postgres-secret-production \
+    #     --from-literal=POSTGRES_PASSWORD=<strong-password> -n <namespace>
+    existingSecret: "postgres-secret-production"
+
+  persistence:
+    size: 20Gi
+    storageClassName: "fast-ssd"   # PROJECT-SPECIFIC: set to your production StorageClass
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi

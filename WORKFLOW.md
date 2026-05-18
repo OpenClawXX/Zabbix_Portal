@@ -60,16 +60,35 @@ Same route handler, same `BACKEND_URL` mechanism — Next.js loads `.env` automa
 
 ## 2. Local development workflow
 
+### First-time setup
+
+```bash
+# 1. Start PostgreSQL (or use docker compose — see below)
+docker run -d --name pg -p 5432:5432 \
+  -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=zabbix_portal \
+  postgres:16
+
+# 2. Create apps/backend/.env (see README.md — Environment files)
+# 3. Create apps/frontend/.env with BACKEND_URL=http://localhost:6769
+```
+
 ### Daily loop
 
 ```bash
-# Backend (from apps/backend/)
+# Option A — run everything with docker compose (from repo root)
+docker compose up -d --build
+
+# Option B — run each service manually in separate terminals
+
+# Terminal 1 — Backend (from apps/backend/)
 source .venv/bin/activate
 uvicorn Zabbix_Main:app --host 0.0.0.0 --port 6769 --reload
 
-# Frontend (from apps/frontend/)
+# Terminal 2 — Frontend (from apps/frontend/)
 npm run dev   # Next.js on :42069
 ```
+
+On first backend startup the schema is created automatically and an `admin`/`admin` root user is seeded.
 
 ### Pre-commit checks
 

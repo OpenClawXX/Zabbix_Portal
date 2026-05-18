@@ -17,9 +17,12 @@ import {
 } from "@mui/material";
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTheme } from "@mui/material/styles";
 import { type Host, api } from "../app/api";
 
 export const Hosts = () => {
+  const theme = useTheme();
+  const isDark = theme.palette.mode === "dark";
   const [hostname, setHostname] = useState("");
   const [ip, setIp] = useState("");
   const [template, setTemplate] = useState("Linux by Zabbix agent");
@@ -293,14 +296,14 @@ export const Hosts = () => {
                 sx={{
                   border: "none",
                   "& .MuiDataGrid-columnHeaders": {
-                    borderBottom: "1px solid rgba(148,163,184,0.24)",
-                    backgroundColor: "rgba(15,23,42,0.45)",
+                    backgroundColor: isDark ? "rgba(11,22,40,0.6)" : "rgba(241,245,249,0.9)",
+                    borderBottom: isDark ? "1px solid rgba(255,255,255,0.07)" : "1px solid rgba(15,23,42,0.08)",
                   },
                   "& .MuiDataGrid-cell": {
-                    borderBottom: "1px solid rgba(148,163,184,0.18)",
+                    borderBottom: isDark ? "1px solid rgba(255,255,255,0.04)" : "1px solid rgba(15,23,42,0.06)",
                   },
                   "& .MuiDataGrid-row:hover": {
-                    backgroundColor: "rgba(51,65,85,0.28)",
+                    backgroundColor: isDark ? "rgba(59,130,246,0.06)" : "rgba(59,130,246,0.04)",
                   },
                 }}
               />

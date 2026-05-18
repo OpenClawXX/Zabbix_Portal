@@ -80,3 +80,23 @@ frontend:
     minReplicas: 2
     maxReplicas: 5
     targetCPUUtilizationPercentage: 80
+
+postgres:
+  image:
+    repository: your-registry/postgres
+    tag: "16"
+    pullPolicy: IfNotPresent
+
+  auth:
+    existingSecret: "postgres-secret-staging"
+
+  persistence:
+    size: 5Gi
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

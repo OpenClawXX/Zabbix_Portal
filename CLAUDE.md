@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project is
 
-A full-stack DevOps UI for managing a Zabbix monitoring server. The backend exposes a REST API that wraps the Zabbix JSON-RPC API; the frontend is a Next.js app that calls it. Primary operations: list/create/delete hosts, add monitoring items and triggers, bulk-import hosts from CSV/XLSX, export inventory to Excel.
+A full-stack DevOps UI for managing a Zabbix monitoring server with role-based access control, team management, and a PostgreSQL user database. The backend exposes a REST API that wraps the Zabbix JSON-RPC API and manages users/teams; the frontend is a Next.js app that calls it. Primary operations: login/auth, manage teams and users, list/create/delete hosts, add monitoring items and triggers, bulk-import hosts from CSV/XLSX, export inventory to Excel.
 
 The repo is set up for **air-gapped / private-registry** deployment on **OpenShift** (or vanilla Kubernetes), with Helm charts and ArgoCD ApplicationSet across dev / staging / production.
 
@@ -14,8 +14,9 @@ The repo is set up for **air-gapped / private-registry** deployment on **OpenShi
 
 ```
 apps/
-  backend/          Python 3.12 / FastAPI
+  backend/          Python 3.12 / FastAPI — Zabbix wrapper + PostgreSQL user/team DB
   frontend/         React 18 / Next.js 15 App Router / TypeScript / MUI
+  postgres/         PostgreSQL 16 — user/team database (Dockerfile + .env)
   filebeat/         Elastic Filebeat 8.17 — ships container logs to Elasticsearch
 helm/
   charts/
@@ -25,6 +26,7 @@ helm/
     zabbix-portal/  umbrella chart depending on all three
 argocd/             AppProject, Application, ApplicationSet, per-env values
 .gitlab/ci/         modular GitLab CI pipeline
+docker-compose.yml  local orchestration (postgres → backend → frontend)
 ```
 
 ---
@@ -77,10 +79,27 @@ docker build -t zabbix-portal-frontend apps/frontend/
 docker build -t zabbix-portal-filebeat apps/filebeat/
 ```
 
-Running containers — backend and frontend must share a Docker network so the frontend route handler can reach the backend:
+The easiest way to run all services together is docker compose from the repo root:
+
+```bash
+# Build and start postgres + backend + frontend
+docker compose up -d --build
+
+# Tear down (data volume is preserved)
+docker compose down
+```
+
+The compose file starts postgres first (with a healthcheck), then backend, then frontend. All three are on the default compose network so they can reach each other by container name.
+
+To run containers individually without docker compose:
 
 ```bash
 docker network create zabbix-net
+
+docker run -d --name postgres --network zabbix-net \
+  -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=zabbix_portal \
+  -p 5432:5432 \
+  zabbix-portal-postgres
 
 docker run -d --name backend --network zabbix-net \
   --env-file apps/backend/.env \
@@ -92,7 +111,7 @@ docker run -d --name frontend --network zabbix-net \
   zabbix-portal-frontend
 ```
 
-Set `BACKEND_URL=http://backend:6769` in `apps/frontend/.env` when both containers are on the same Docker network. Use `http://host.docker.internal:6769` for Mac/Windows Docker Desktop when the backend runs natively or on a separate container without a shared network.
+Set `BACKEND_URL=http://backend:6769` in `apps/frontend/.env` and `DATABASE_URL=postgresql://postgres:postgres@postgres:5432/zabbix_portal` in `apps/backend/.env` when all containers are on the same network.
 
 ---
 
@@ -102,14 +121,20 @@ Set `BACKEND_URL=http://backend:6769` in `apps/frontend/.env` when both containe
 flowchart LR
     ZabbixBase --> Host_Manager
     ZabbixBase --> Item_Manager
-    Host_Manager --> main["Zabbix_Main.py"]
+    Database.py --> main["Zabbix_Main.py"]
+    Auth.py --> main
+    User_Management.py --> main
+    Host_Manager --> main
     Item_Manager --> main
 ```
 
-- **`ZabbixBase`** loads `apps/backend/.env` and creates a `zabbix_utils.ZabbixAPI` session. All managers inherit from it. `self.zapi` is `None` when Zabbix is unreachable — callers must guard against this.
+- **`ZabbixBase`** loads `apps/backend/.env` and creates a `zabbix_utils.ZabbixAPI` session. All Zabbix managers inherit from it. `self.zapi` is `None` when Zabbix is unreachable — callers must guard against this.
 - **`Host_Manager`** wraps host CRUD and Excel export (`openpyxl` / `pandas`).
 - **`Item_Manager`** wraps item and trigger creation. Trigger expressions follow Zabbix 5.x classic format: `{hostname:item_key.last()} operator threshold`.
-- **`Zabbix_Main.py`** instantiates one `Host_Manager` and one `Item_Manager` at module load time (module-level singletons). There is no dependency injection.
+- **`Database.py`** owns the PostgreSQL connection (`psycopg2`), creates the schema on startup (`init_db()`), and runs idempotent migrations. Tables: `teams`, `team_users` (with `roles TEXT[]`), `host_assignments`.
+- **`Auth.py`** handles password hashing (`bcrypt`), JWT creation/validation (`python-jose`), and FastAPI dependency functions: `get_current_user`, `require_root`, `require_admin`, `require_operator`. Also exports `can_grant_roles()` — the guard that prevents users from granting roles higher than their own.
+- **`User_Management.py`** contains all SQL queries for users, teams, host assignments, and the overview aggregation. Seeds a default `admin`/`admin` root user on first startup.
+- **`Zabbix_Main.py`** instantiates `Host_Manager`, `Item_Manager`, calls `init_db()` and `seed_root()` at module load. All route handlers live here. There is no dependency injection.
 - FastAPI runs on **port 6769** locally and in Docker/Kubernetes.
 
 Required environment variables (in `apps/backend/.env`):
@@ -118,26 +143,37 @@ Required environment variables (in `apps/backend/.env`):
 ZABBIX_URL=http://your-zabbix-server
 ZABBIX_USER=Admin
 ZABBIX_PASS=zabbix
+
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/zabbix_portal
+
+# Long random string — generate with: python -c "import secrets; print(secrets.token_hex(32))"
+SECRET_KEY=change-me-in-production
+
 BACKEND_URL=http://localhost:6769
 ```
 
-`BACKEND_URL` is consumed by the frontend, not the backend itself — it lives here so there is one `.env` file to maintain. These can be supplied in two ways:
-- **Local development** — place them in `apps/backend/.env` (loaded by `python-dotenv`).
-- **Kubernetes / OpenShift** — inject them via a ConfigMap (non-sensitive values) or Secret (credentials). Mount the ConfigMap as environment variables in the Pod spec or via `envFrom`. Do not bake `.env` files into container images.
+- `DATABASE_URL` — PostgreSQL connection string. The backend creates the schema and runs migrations on every startup (idempotent).
+- `SECRET_KEY` — signs JWT tokens. **Must be changed before any real deployment.** If rotated, all existing tokens are immediately invalidated.
+- `BACKEND_URL` — consumed by the frontend, not the backend itself — it lives here so there is one `.env` file to maintain.
 
-The URL is normalised — either `http://host` or `http://host/api_jsonrpc.php` works.
+These can be supplied in two ways:
+- **Local development** — place them in `apps/backend/.env` (loaded by `python-dotenv`).
+- **Kubernetes / OpenShift** — inject them via a ConfigMap (non-sensitive values) or Secret (`ZABBIX_PASS`, `SECRET_KEY`, DB password). Mount via `envFrom`. Do not bake `.env` files into container images.
+
+The Zabbix URL is normalised — either `http://host` or `http://host/api_jsonrpc.php` works.
 
 ---
 
 ## Frontend architecture
 
-- All API calls go through the thin client in `src/app/api.ts`. Every call is prefixed with `/api` — all environments route through the same Next.js route handler.
+- All API calls go through the thin client in `src/app/api.ts`. Every call is prefixed with `/api` — all environments route through the same Next.js route handler. The client holds the JWT in `localStorage` and attaches it as a `Bearer` token on every request. On a 401 it clears the token and redirects to `/login` (except during the login call itself, which passes `{ skipRedirect: true }`).
 - **API proxying** — `src/app/api/[...path]/route.ts` is a catch-all route handler that proxies every `/api/*` request to `BACKEND_URL` at request time. `BACKEND_URL` defaults to `http://localhost:6769` if not set.
 - **`BACKEND_URL` loading** — `src/instrumentation.ts` runs `dotenv.config()` once at server startup, loading `apps/frontend/.env` (baked into the image at build time). In dev, Next.js loads `.env` automatically.
-- Routing: Next.js App Router (`src/app/`). Three routes: `page.tsx` (/), `hosts/page.tsx`, `items/page.tsx`. Each thin page file re-exports the real component from `src/views/`.
-- Root layout: `src/app/layout.tsx` (server component — html/body/AppRouterCacheProvider). Providers: `src/app/providers.tsx` (client boundary — ThemeProvider + AppShell).
-- Theme: `src/app/theme.ts` (MUI v5).
-- Shell: `src/app/layout/AppShell.tsx` — uses `usePathname` from `next/navigation` and `Link` from `next/link`. Polls `/api/health` every 10 s and shows a red banner if the backend is unreachable or a yellow banner if the backend is up but Zabbix is disconnected.
+- **Auth context** — `src/app/context/AuthContext.tsx` holds the decoded JWT payload (`AuthUser`: `id`, `username`, `roles: string[]`, `team_id`). Consumed throughout the app via `useAuth()`.
+- Routing: Next.js App Router (`src/app/`). Routes: `page.tsx` (/), `hosts/page.tsx`, `items/page.tsx`, `teams/page.tsx`, `users/page.tsx`, `login/page.tsx`. Each thin page file re-exports the real view component from `src/views/`.
+- Root layout: `src/app/layout.tsx` (server component — html/body/AppRouterCacheProvider). Providers: `src/app/providers.tsx` (client boundary — ThemeProvider + AppShell). The login page bypasses AppShell.
+- Theme: `src/app/theme.ts` (MUI v5, dark/light toggle persisted in `localStorage`).
+- Shell: `src/app/layout/AppShell.tsx` — polls `/api/health` every **15 s** and shows live status dots (green/red) for Backend API and Zabbix in the sidebar. The Users nav item is hidden for non-admin roles (`root` and `team_lead` can see it).
 - No global state manager — components call `api.*` directly.
 - All page components are client components (`'use client'`) because they use React hooks and browser APIs.
 
@@ -207,6 +243,11 @@ The pipeline fires **only on tag pushes**. Branch pushes and MR merges do nothin
 
 - The frontend Docker build context is `apps/frontend/` — the Dockerfile lives there and uses plain `npm ci`.
 - `apps/frontend/.env` is baked into the frontend image at build time (not excluded by `.dockerignore`). Update it before building the image when the backend address changes.
+- `SECRET_KEY` in `apps/backend/.env` must be a long random string in any real deployment. Rotating it invalidates all existing JWT sessions immediately.
+- The database schema is created and migrated automatically on every backend startup (`init_db()` in `Database.py`). Migrations are idempotent — safe to run against existing data. No manual migration step is needed.
+- On first startup the backend seeds an `admin` user with password `admin` and role `root`. This account must have its password changed before the system is used in any real environment.
+- Roles are stored as a PostgreSQL `TEXT[]` array in `team_users.roles`. A user can hold multiple roles simultaneously. The JWT `roles` claim is a JSON array.
+- `can_grant_roles()` in `Auth.py` is enforced on both `POST /users` and `PUT /users/{id}`. It prevents any user from granting a role higher than their own. Only `root` can grant `auditor`.
 - When you change Helm values that drive in-cluster behaviour, also bump the chart's `version:` in `Chart.yaml` so ArgoCD detects the change as a new revision.
 - Don't reintroduce nginx in the frontend container without thinking through OpenShift compatibility — the standard nginx image runs as root and binds port 80, both of which fail under the `restricted` SCC.
 - Don't change `package.json` versions to `^x.y.z` ranges — see [`README.md`](./README.md#private-network--openshift) for why exact pinning matters in this environment.

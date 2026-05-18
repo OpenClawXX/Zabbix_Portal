@@ -1,0 +1,32 @@
+image:
+  # PRIVATE NETWORK: replace with <your-registry>/postgres:16
+  repository: postgres
+  tag: "16"
+  pullPolicy: IfNotPresent
+
+auth:
+  database: zabbix_portal
+  username: postgres
+  # password is only used when existingSecret is empty (renders the secret.yaml template)
+  password: postgres
+  # PROJECT-SPECIFIC: create before deploying:
+  #   kubectl create secret generic postgres-secret \
+  #     --from-literal=POSTGRES_PASSWORD=<password> -n <namespace>
+  existingSecret: ""
+
+persistence:
+  size: 5Gi
+  storageClassName: ""   # leave empty to use the cluster default StorageClass
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}

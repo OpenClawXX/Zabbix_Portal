@@ -104,3 +104,30 @@ filebeat:
     limits:
       cpu: 200m
       memory: 200Mi
+
+postgres:
+  image:
+    # PRIVATE NETWORK: replace with your internal Artifactory / Nexus mirror.
+    repository: your-registry/postgres
+    tag: "16"
+    pullPolicy: IfNotPresent
+
+  auth:
+    database: zabbix_portal
+    username: postgres
+    # PROJECT-SPECIFIC: create before deploying:
+    #   kubectl create secret generic postgres-secret \
+    #     --from-literal=POSTGRES_PASSWORD=<password> -n <namespace>
+    existingSecret: "postgres-secret"
+
+  persistence:
+    size: 5Gi
+    storageClassName: ""
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

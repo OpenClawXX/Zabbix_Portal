@@ -33,5 +33,5 @@ class Zabbix_Base:
             try:
                 self.zapi.logout()
                 print("Zabbix session closed.")
-            except:
+            except Exception:
                 pass

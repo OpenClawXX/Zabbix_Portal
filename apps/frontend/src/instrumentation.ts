@@ -1,4 +1,6 @@
 export const register = async () => {
-  const { config } = await import("dotenv");
-  config();
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    const { config } = await import("dotenv");
+    config();
+  }
 };

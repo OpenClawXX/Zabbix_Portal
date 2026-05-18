@@ -70,3 +70,23 @@ frontend:
 
   autoscaling:
     enabled: false
+
+postgres:
+  image:
+    repository: your-registry/postgres
+    tag: "16"
+    pullPolicy: Always
+
+  auth:
+    existingSecret: "postgres-secret-dev"
+
+  persistence:
+    size: 1Gi
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi

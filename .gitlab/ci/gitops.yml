@@ -55,6 +55,8 @@ helm:template:
       optional: true
     - job: filebeat:docker:build
       optional: true
+    - job: postgres:docker:build
+      optional: true
   variables:
     ARGOCD_OPTS: "--server $ARGOCD_SERVER --auth-token $ARGOCD_AUTH_TOKEN --insecure"
 
@@ -83,6 +85,10 @@ deploy:staging:
       if [ "$FILEBEAT_CHANGED" = "1" ]; then
         echo "→ Pinning $FILEBEAT_HELM_KEY → $CI_COMMIT_TAG"
         SET_ARGS="$SET_ARGS --helm-set $FILEBEAT_HELM_KEY.image.tag=$CI_COMMIT_TAG"
+      fi
+      if [ "$POSTGRES_CHANGED" = "1" ]; then
+        echo "→ Pinning $POSTGRES_HELM_KEY → $CI_COMMIT_TAG"
+        SET_ARGS="$SET_ARGS --helm-set $POSTGRES_HELM_KEY.image.tag=$CI_COMMIT_TAG"
       fi
 
       if [ -n "$SET_ARGS" ]; then
@@ -142,6 +148,12 @@ deploy:production:
         SET_ARGS="$SET_ARGS --helm-set $FILEBEAT_HELM_KEY.image.tag=$CI_COMMIT_TAG"
       else
         echo "→ Filebeat unchanged since $PREV_TAG, leaving its image tag as-is"
+      fi
+      if [ "$POSTGRES_CHANGED" = "1" ]; then
+        echo "→ Pinning $POSTGRES_HELM_KEY → $CI_COMMIT_TAG"
+        SET_ARGS="$SET_ARGS --helm-set $POSTGRES_HELM_KEY.image.tag=$CI_COMMIT_TAG"
+      else
+        echo "→ Postgres unchanged since $PREV_TAG, leaving its image tag as-is"
       fi
 
       if [ -z "$SET_ARGS" ] && [ "$HELM_CHANGED" != "1" ]; then
@@ -206,6 +218,12 @@ deploy:dr:
         SET_ARGS="$SET_ARGS --helm-set $FILEBEAT_HELM_KEY.image.tag=$CI_COMMIT_TAG"
       else
         echo "→ Filebeat unchanged since $PREV_TAG, leaving its image tag as-is"
+      fi
+      if [ "$POSTGRES_CHANGED" = "1" ]; then
+        echo "→ Pinning $POSTGRES_HELM_KEY → $CI_COMMIT_TAG"
+        SET_ARGS="$SET_ARGS --helm-set $POSTGRES_HELM_KEY.image.tag=$CI_COMMIT_TAG"
+      else
+        echo "→ Postgres unchanged since $PREV_TAG, leaving its image tag as-is"
       fi
 
       if [ -z "$SET_ARGS" ] && [ "$HELM_CHANGED" != "1" ]; then
