@@ -20,6 +20,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useAuth } from "../app/context/AuthContext";
 import { api, type Team } from "../app/api";
+import { useSync } from "../app/context/SyncContext";
 
 type Stats = {
   totalHosts: number;
@@ -129,6 +130,7 @@ const StatusRow = ({
 
 export const Overview = () => {
   const { user } = useAuth();
+  const { lastSync } = useSync();
   const [stats, setStats] = useState<Stats | null>(null);
   const [health, setHealth] = useState<{ ok: boolean; zabbix: boolean } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -175,7 +177,7 @@ export const Overview = () => {
       }
     };
     void load();
-  }, []);
+  }, [lastSync]);
 
   return (
     <Box>

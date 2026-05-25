@@ -1,113 +1,15 @@
 # =============================================================================
-# Common variables and reusable job templates.
-# =============================================================================
-# Every project-specific value in this pipeline lives in this file. When
-# adapting this CI to a new project, change only the values under the
-# "Project-specific configuration" block (or override them in GitLab
-# Settings → CI/CD → Variables).
-#
-# See .cienv-example at the repo root for the complete list of variables
-# this pipeline reads, including which ones must be set as CI/CD secrets.
-#
-# RELEASE MODEL: This pipeline runs ONLY on git tag pushes. Branch pushes
-# and merge requests do nothing. Tag the commit you want to release —
-# everything downstream (build, deploy, manual production gate) flows
-# from that single trigger.
-# =============================================================================
-
-variables:
-  # ── Project identity ────────────────────────────────────────────────────────
-  PROJECT_NAME: zabbix-portal
-
-  # ── Monorepo paths ──────────────────────────────────────────────────────────
-  # Paths relative to the repo root. Used by detect.yml and by build jobs.
-  BACKEND_PATH: apps/backend
-  FRONTEND_PATH: apps/frontend
-  FILEBEAT_PATH: apps/filebeat
-  POSTGRES_PATH: apps/postgres
-  HELM_PATH: helm/charts
-
-  # ── Container images ────────────────────────────────────────────────────────
-  # Final image refs are <CI_REGISTRY_IMAGE>/<image-name>.
-  # CI_REGISTRY_IMAGE is provided automatically by GitLab.
-  BACKEND_IMAGE_NAME: backend
-  FRONTEND_IMAGE_NAME: frontend
-  FILEBEAT_IMAGE_NAME: filebeat
-  POSTGRES_IMAGE_NAME: postgres
-  BACKEND_IMAGE: $CI_REGISTRY_IMAGE/$BACKEND_IMAGE_NAME
-  FRONTEND_IMAGE: $CI_REGISTRY_IMAGE/$FRONTEND_IMAGE_NAME
-  FILEBEAT_IMAGE: $CI_REGISTRY_IMAGE/$FILEBEAT_IMAGE_NAME
-  POSTGRES_IMAGE: $CI_REGISTRY_IMAGE/$POSTGRES_IMAGE_NAME
-
-  # ── Root workspace config files that invalidate the frontend build ──────────
-  # detect.yml uses this regex to mark FRONTEND_CHANGED=1 when any of these
-  # files change at the repo root. Update if you switch package managers or
-  # build tools.
-  ROOT_JS_CONFIGS: "package\\.json|package-lock\\.json|biome\\.json|\\.npmrc"
-
-  # ── Helm ────────────────────────────────────────────────────────────────────
-  # HELM_CHART_PATH must match the umbrella chart directory name under helm/charts/.
-  # Rename the directory to match PROJECT_NAME when reusing for a new project.
-  HELM_CHART_PATH: "helm/charts/${PROJECT_NAME}"
-  # Sub-chart keys — match the 'name:' field in each sub-chart's Chart.yaml.
-  # These are generic and do not need to change between projects.
-  BACKEND_HELM_KEY: backend
-  FRONTEND_HELM_KEY: frontend
-  FILEBEAT_HELM_KEY: filebeat
-  POSTGRES_HELM_KEY: postgres
-
-  # ── Kubernetes ──────────────────────────────────────────────────────────────
-  K8S_NAMESPACE: "${PROJECT_NAME}"
-
-  # ── ArgoCD application names ────────────────────────────────────────────────
-  ARGOCD_APP_STAGING: "${PROJECT_NAME}-staging"
-  ARGOCD_APP_PRODUCTION: "${PROJECT_NAME}-production"
-  ARGOCD_APP_DR: "${PROJECT_NAME}-dr"
-
-  # ── Domain configuration ────────────────────────────────────────────────────
-  # PROJECT-SPECIFIC: set LOCAL_DOMAIN to your internal cluster domain (used for
-  # dev/staging hosts) and PROD_DOMAIN to your public production domain.
-  LOCAL_DOMAIN: "local"
-  PROD_DOMAIN: "example.com"
-
-  # ── Environment URLs (used by GitLab environment dashboards) ────────────────
-  STAGING_URL: "https://staging.${PROJECT_NAME}.${PROD_DOMAIN}"
-  PRODUCTION_URL: "https://${PROJECT_NAME}.${PROD_DOMAIN}"
-  DR_URL: "https://dr.${PROJECT_NAME}.${PROD_DOMAIN}"
-
-  # ── Tooling versions ────────────────────────────────────────────────────────
-  NODE_VERSION: "22"
-  PYTHON_VERSION: "3.12"
-  HELM_VERSION: "3.17.0"
-  ARGOCD_CLI_VERSION: "v2.14.0"
-  FILEBEAT_VERSION: "8.17.0"   # must match image tag in apps/filebeat/Dockerfile and helm/charts/filebeat/values.yaml
-  KANIKO_VERSION: "v1.23.2"    # used in .docker_base image tag; keep in sync with the -debug suffix below
-
-# =============================================================================
-# Reusable job templates — do not edit per-project.
+# Reusable job templates — shared across all pipeline jobs.
+# All project-specific variables are set in GitLab Settings → CI/CD → Variables.
 # =============================================================================
 
 .base:
   interruptible: true
   tags:
-    - docker
+    - docker  # replace with your GitLab runner tag
 
 .docker_base:
   extends: .base
   image:
-    # PRIVATE NETWORK: replace with <your-registry>/docker-virtual/gcr.io/kaniko-project/executor:v1.23.2-debug
-    name: gcr.io/kaniko-project/executor:${KANIKO_VERSION}-debug
+    name: <your-kaniko-image>  # PRIVATE NETWORK: replace with your internal Kaniko image (e.g. your-registry/kaniko:latest)
     entrypoint: [""]
-  before_script:
-    - mkdir -p /kaniko/.docker
-    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
-
-# =============================================================================
-# Single source of truth for pipeline triggers.
-# =============================================================================
-# Every job in this pipeline runs ONLY when a git tag is pushed.
-# To restrict further (e.g. semver tags only), tighten this regex:
-#   - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
-.rules_release:
-  rules:
-    - if: $CI_COMMIT_TAG

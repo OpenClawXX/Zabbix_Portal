@@ -77,3 +77,47 @@ def init_db():
         raise
     finally:
         conn.close()
+
+
+# Zabbix tables to watch for real-time change notifications.
+# Uses savepoints so missing tables (version differences) are silently skipped.
+_WATCHED_ZABBIX_TABLES = ["users", "usrgrp", "users_groups", "hosts_groups", "hstgrp"]
+
+
+def install_notify_triggers() -> None:
+    """Install pg_notify triggers on Zabbix tables.
+
+    Fires NOTIFY zabbix_changes whenever users, groups, or host-group
+    memberships change in the Zabbix DB so the portal can sync immediately.
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE OR REPLACE FUNCTION zabbix_portal_notify()
+                RETURNS trigger AS $$
+                BEGIN
+                    PERFORM pg_notify('zabbix_changes', TG_TABLE_NAME);
+                    RETURN COALESCE(NEW, OLD);
+                END;
+                $$ LANGUAGE plpgsql;
+            """)
+            for table in _WATCHED_ZABBIX_TABLES:
+                cur.execute("SAVEPOINT sp")
+                try:
+                    cur.execute(f"""
+                        DROP TRIGGER IF EXISTS zabbix_portal_notify_{table} ON {table};
+                        CREATE TRIGGER zabbix_portal_notify_{table}
+                        AFTER INSERT OR UPDATE OR DELETE ON {table}
+                        FOR EACH ROW EXECUTE FUNCTION zabbix_portal_notify();
+                    """)
+                    cur.execute("RELEASE SAVEPOINT sp")
+                except Exception:
+                    cur.execute("ROLLBACK TO SAVEPOINT sp")
+        conn.commit()
+        print("ZabbixSync: notify triggers installed on Zabbix tables.")
+    except Exception as exc:
+        conn.rollback()
+        print(f"install_notify_triggers failed (non-fatal): {repr(exc)}")
+    finally:
+        conn.close()

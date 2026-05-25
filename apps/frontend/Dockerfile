@@ -14,7 +14,7 @@
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 # PRIVATE NETWORK: change to <your-registry>/docker-virtual/node:22.11.0-alpine3.20
-FROM node:22.11.0-alpine3.20 AS builder
+FROM node:22.2-alpine AS builder
 
 WORKDIR /app
 
@@ -27,13 +27,14 @@ RUN npm install
 
 COPY . .
 
+ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN npm run build
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
 # PRIVATE NETWORK: change to <your-registry>/docker-virtual/node:22.11.0-alpine3.20
-FROM node:22.11.0-alpine3.20 AS runner
+FROM node:22.2-alpine AS runner
 
 WORKDIR /app
 
@@ -42,15 +43,11 @@ ENV PORT=42069
 ENV HOSTNAME=0.0.0.0
 ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN addgroup -g 1001 -S nodejs \
-    && adduser -S nextjs -u 1001 -G nodejs
+COPY --from=builder --chown=1001:0 /app/public ./public
+COPY --from=builder --chown=1001:0 /app/.next/standalone ./
+COPY --from=builder --chown=1001:0 /app/.next/static ./.next/static
 
-COPY --from=builder --chown=nextjs:nodejs /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-COPY --from=builder --chown=nextjs:nodejs /app/.env ./.env
-
-USER nextjs
+USER 1001
 
 EXPOSE 42069
 

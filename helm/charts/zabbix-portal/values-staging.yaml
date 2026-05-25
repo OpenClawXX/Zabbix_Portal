@@ -1,0 +1,9 @@
+# Staging environment overrides.
+# These values are merged on top of values.yaml during deploy:staging.
+# Only include values that differ from the base values.yaml.
+
+backend:
+  replicaCount: 1
+
+frontend:
+  replicaCount: 1

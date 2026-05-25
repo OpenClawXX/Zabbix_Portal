@@ -1,26 +1,10 @@
 services:
-  postgres:
-    build: apps/postgres/
-    container_name: postgres
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   backend:
     build: apps/backend/
     container_name: backend
     ports:
       - "6769:6769"
     env_file: apps/backend/.env
-    depends_on:
-      postgres:
-        condition: service_healthy
 
   frontend:
     build: apps/frontend/
@@ -29,6 +13,3 @@ services:
       - "42069:42069"
     depends_on:
       - backend
-
-volumes:
-  postgres_data:

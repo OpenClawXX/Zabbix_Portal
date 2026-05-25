@@ -41,6 +41,9 @@ spec:
             - name: http
               containerPort: 42069
               protocol: TCP
+          env:
+            - name: BACKEND_URL
+              value: {{ .Values.backendUrl | quote }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:

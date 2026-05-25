@@ -38,12 +38,17 @@ import { useCallback, useEffect, useState } from "react";
 import { useTheme } from "@mui/material/styles";
 import { useAuth } from "../app/context/AuthContext";
 import { api, type Team, type UserRow } from "../app/api";
+import { useSync } from "../app/context/SyncContext";
 
+// Role definitions — ordered from highest to lowest privilege.
+// root and auditor are standalone toggles (not part of the cascade chain).
+// team_lead → operator → member cascade: checking a higher role auto-checks lower ones.
 const ROLE_OPTIONS = [
-  { value: "team_lead", label: "Team Lead", color: "#3B82F6", description: "Full team management — users, hosts, assignments, passwords." },
+  { value: "root",      label: "Root",      color: "#EF4444", description: "Full platform access across all teams. Can manage all users, teams, and hosts, and grant any role." },
+  { value: "team_lead", label: "Team Lead", color: "#3B82F6", description: "Full team management — add/remove users, assign hosts, reset passwords." },
   { value: "operator",  label: "Operator",  color: "#10B981", description: "Create/delete hosts and monitoring within the team. No user management." },
-  { value: "member",    label: "Member",    color: "#64748B", description: "Read-only access to the team's hosts." },
-  { value: "auditor",   label: "Auditor",   color: "#F59E0B", description: "Read-only across ALL teams. For compliance and security reviews." },
+  { value: "member",    label: "Member",    color: "#64748B", description: "Read-only access to the team's own hosts." },
+  { value: "auditor",   label: "Auditor",   color: "#F59E0B", description: "Read-only across ALL teams. For compliance and security reviews. Only root can grant this." },
 ] as const;
 
 // Hierarchy from lowest to highest (auditor is standalone — not part of the chain)
@@ -102,6 +107,7 @@ const avatarColor = (name: string) => {
 export const Users = () => {
   const theme = useTheme();
   const isDark = theme.palette.mode === "dark";
+  const { lastSync } = useSync();
   const { user: currentUser } = useAuth();
   const isRoot = currentUser?.roles?.includes("root") ?? false;
 
@@ -144,7 +150,7 @@ export const Users = () => {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); }, [load, lastSync]);
 
   const openEdit = (u: UserRow) => {
     setEditUser(u);
@@ -317,7 +323,6 @@ export const Users = () => {
               <Select value={filterRole} label="Role" onChange={(e: SelectChangeEvent) => setFilterRole(e.target.value)}>
                 <MenuItem value="">All roles</MenuItem>
                 {ROLE_OPTIONS.map((r) => <MenuItem key={r.value} value={r.value}>{r.label}</MenuItem>)}
-                <MenuItem value="root">Root</MenuItem>
               </Select>
             </FormControl>
           </Stack>

@@ -14,9 +14,3 @@ dependencies:
   - name: frontend
     version: "0.1.0"
     repository: "file://../frontend"
-  - name: filebeat
-    version: "0.1.0"
-    repository: "file://../filebeat"
-  - name: postgres
-    version: "0.1.0"
-    repository: "file://../postgres"

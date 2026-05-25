@@ -1,0 +1,9 @@
+# DR environment overrides.
+# These values are merged on top of values.yaml during deploy:dr.
+# Only include values that differ from the base values.yaml.
+
+backend:
+  replicaCount: 3
+
+frontend:
+  replicaCount: 3

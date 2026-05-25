@@ -1,24 +1,28 @@
 # =============================================================================
-# GitOps — Helm validation + ArgoCD deploy.
+# GitOps — Helm validation + deploy.
 # =============================================================================
 # Tag-only release pipeline. On every tag:
 #   1. Apps that changed since the previous tag get rebuilt and pushed.
-#   2. deploy:staging auto-syncs the staging Application.
-#   3. deploy:production is a manual gate — same rules as the changed apps,
-#      with per-app image-tag pinning.
+#   2. deploy:staging auto-deploys to the staging cluster.
+#   3. deploy:production is a manual gate.
+#   4. deploy:dr is a manual gate.
+#
+# Namespaces are pre-created in OpenShift — this pipeline does not create them.
+# Set K8S_NAMESPACE in GitLab Settings → CI/CD → Variables to point to the
+# existing namespace for this project.
 # =============================================================================
 
 .helm_base:
   extends: .base
   image:
-    name: alpine/helm:${HELM_VERSION}
+    name: <your-helm-image>  # PRIVATE NETWORK: replace with your internal image that has the helm CLI installed (e.g. your-registry/helm:latest)
     entrypoint: [""]
   needs:
     - job: detect
       artifacts: true
   before_script:
     - helm version
-    - helm dependency build "$HELM_CHART_PATH/"
+    - helm dependency build "helm/charts/$PROJECT_NAME/"
 
 # ── Helm lint ─────────────────────────────────────────────────────────────────
 helm:lint:
@@ -26,26 +30,28 @@ helm:lint:
   stage: lint
   script:
     - |
-      for chart in "$HELM_PATH"/*/; do
+      [ "$HELM_CHANGED" = "1" ] || { echo "Helm unchanged — skipping lint."; exit 0; }
+      for chart in "helm/charts"/*/; do
         echo "── helm lint $chart"
         helm lint "$chart"
       done
   rules:
-    - if: $CI_COMMIT_TAG && $HELM_CHANGED == "1"
+    - if: $CI_COMMIT_TAG
 
 # ── Helm template validation ──────────────────────────────────────────────────
 helm:template:
   extends: .helm_base
   stage: lint
   script:
-    - helm template "$PROJECT_NAME" "$HELM_CHART_PATH/" --debug > /dev/null
+    - |
+      [ "$HELM_CHANGED" = "1" ] || { echo "Helm unchanged — skipping template check."; exit 0; }
+      helm template "$PROJECT_NAME" "helm/charts/$PROJECT_NAME/" --debug > /dev/null
   rules:
-    - if: $CI_COMMIT_TAG && $HELM_CHANGED == "1"
+    - if: $CI_COMMIT_TAG
 
-# ── ArgoCD shared setup ───────────────────────────────────────────────────────
-.argocd_base:
-  extends: .base
-  image: argoproj/argocd:${ARGOCD_CLI_VERSION}
+# ── Deploy shared setup ───────────────────────────────────────────────────────
+.deploy_base:
+  extends: .helm_base
   needs:
     - job: detect
       artifacts: true
@@ -53,61 +59,78 @@ helm:template:
       optional: true
     - job: frontend:docker:build
       optional: true
-    - job: filebeat:docker:build
-      optional: true
-    - job: postgres:docker:build
-      optional: true
-  variables:
-    ARGOCD_OPTS: "--server $ARGOCD_SERVER --auth-token $ARGOCD_AUTH_TOKEN --insecure"
+
+.deploy_script: &deploy_script |
+  set -e
+  echo "── Deploying to environment: $DEPLOY_ENV ────────────────"
+  echo "   Namespace : $DEPLOY_NAMESPACE"
+  echo "   Cluster   : $HELM_KUBEAPISERVER"
+  echo "   Values    : $VALUES_FILE"
+  echo "──────────────────────────────────────────────────────────"
+  SET_ARGS=""
+  if [ "$BACKEND_CHANGED" = "1" ]; then
+    echo "→ Pinning backend → $CI_COMMIT_TAG"
+    SET_ARGS="$SET_ARGS --set backend.image.tag=$CI_COMMIT_TAG"
+  else
+    echo "→ Backend unchanged since $PREV_TAG, leaving its image tag as-is"
+  fi
+  if [ "$FRONTEND_CHANGED" = "1" ]; then
+    echo "→ Pinning frontend → $CI_COMMIT_TAG"
+    SET_ARGS="$SET_ARGS --set frontend.image.tag=$CI_COMMIT_TAG"
+  else
+    echo "→ Frontend unchanged since $PREV_TAG, leaving its image tag as-is"
+  fi
+  if [ -z "$SET_ARGS" ] && [ "$HELM_CHANGED" != "1" ]; then
+    echo "Nothing to update — exiting."
+    exit 0
+  fi
+  # PROJECT_NAME = your GitLab CI variable for the Helm release name (e.g. zabbix-portal)
+  # ARTIFACTORY_REGISTRY = your GitLab CI variable for the Artifactory Docker repo path (e.g. artifactory.example.com/docker-local)
+  helm upgrade --install "$PROJECT_NAME" "helm/charts/$PROJECT_NAME/" \
+    --namespace "$DEPLOY_NAMESPACE" \
+    -f "helm/charts/$PROJECT_NAME/values.yaml" \
+    -f "helm/charts/$PROJECT_NAME/$VALUES_FILE" \
+    --set backend.image.repository="$ARTIFACTORY_REGISTRY/backend" \
+    --set frontend.image.repository="$ARTIFACTORY_REGISTRY/frontend" \
+    --set frontend.backendUrl="http://$PROJECT_NAME-backend:6769" \
+    --set backend.secret.zabbixUrl="$ZABBIX_URL" \
+    --set backend.secret.zabbixUser="$ZABBIX_USER" \
+    --set backend.secret.zabbixPass="$ZABBIX_PASS" \
+    --set backend.secret.secretKey="$SECRET_KEY" \
+    --set backend.secret.databaseUrl="$DATABASE_URL" \
+    --wait \
+    --timeout 5m \
+    $SET_ARGS
 
 # ── Deploy to staging (auto on tag) ──────────────────────────────────────────
 deploy:staging:
-  extends: .argocd_base
+  extends: .deploy_base
   stage: staging
+  needs:
+    - job: detect
+      artifacts: true
+    - job: backend:docker:build
+      optional: true
+    - job: frontend:docker:build
+      optional: true
   environment:
     name: staging
-    url: $STAGING_URL
+    url: $STAGING_URL  # replace STAGING_URL with your GitLab CI variable for the staging environment URL
+  variables:
+    DEPLOY_ENV: "staging"
+    DEPLOY_NAMESPACE: "$K8S_NAMESPACE"        # set K8S_NAMESPACE in GitLab Settings → CI/CD → Variables to your existing OpenShift namespace
+    VALUES_FILE: "values-staging.yaml"
+    HELM_KUBEAPISERVER: "$STAGING_SERVER"     # replace STAGING_SERVER with your GitLab CI variable for the staging cluster URL
+    HELM_KUBETOKEN: "$STAGING_TOKEN"          # replace STAGING_TOKEN with your GitLab CI variable for the staging auth token
+    HELM_KUBEINSECURE_SKIP_TLS_VERIFY: "true"
   script:
-    - |
-      set -e
-
-      # Pin the staging Application to this tag for whichever apps changed.
-      # Tags advance the staging deployment in lock-step with what was rebuilt.
-      SET_ARGS=""
-      if [ "$BACKEND_CHANGED" = "1" ]; then
-        echo "→ Pinning $BACKEND_HELM_KEY → $CI_COMMIT_TAG"
-        SET_ARGS="$SET_ARGS --helm-set $BACKEND_HELM_KEY.image.tag=$CI_COMMIT_TAG"
-      fi
-      if [ "$FRONTEND_CHANGED" = "1" ]; then
-        echo "→ Pinning $FRONTEND_HELM_KEY → $CI_COMMIT_TAG"
-        SET_ARGS="$SET_ARGS --helm-set $FRONTEND_HELM_KEY.image.tag=$CI_COMMIT_TAG"
-      fi
-      if [ "$FILEBEAT_CHANGED" = "1" ]; then
-        echo "→ Pinning $FILEBEAT_HELM_KEY → $CI_COMMIT_TAG"
-        SET_ARGS="$SET_ARGS --helm-set $FILEBEAT_HELM_KEY.image.tag=$CI_COMMIT_TAG"
-      fi
-      if [ "$POSTGRES_CHANGED" = "1" ]; then
-        echo "→ Pinning $POSTGRES_HELM_KEY → $CI_COMMIT_TAG"
-        SET_ARGS="$SET_ARGS --helm-set $POSTGRES_HELM_KEY.image.tag=$CI_COMMIT_TAG"
-      fi
-
-      if [ -n "$SET_ARGS" ]; then
-        echo "── argocd app set ─────────────────────────────────────"
-        argocd app set "$ARGOCD_APP_STAGING" $ARGOCD_OPTS $SET_ARGS
-      fi
-
-      echo "── argocd app sync ────────────────────────────────────"
-      argocd app sync "$ARGOCD_APP_STAGING" $ARGOCD_OPTS --timeout 300
-      argocd app wait "$ARGOCD_APP_STAGING" $ARGOCD_OPTS --timeout 300 --health --sync
+    - *deploy_script
   rules:
     - if: $CI_COMMIT_TAG
 
 # ── Deploy to production (manual gate) ───────────────────────────────────────
-# Manual click required even on a tag. Per-app pinning: only the apps that
-# changed since the previous tag get a new image tag in production. Unchanged
-# apps stay on whatever tag was last set.
 deploy:production:
-  extends: .argocd_base
+  extends: .deploy_base
   stage: production
   needs:
     - job: detect
@@ -118,66 +141,25 @@ deploy:production:
       optional: true
     - job: frontend:docker:build
       optional: true
-    - job: filebeat:docker:build
-      optional: true
   when: manual
   environment:
     name: production
-    url: $PRODUCTION_URL
+    url: $PRODUCTION_URL  # replace PRODUCTION_URL with your GitLab CI variable for the production environment URL
+  variables:
+    DEPLOY_ENV: "production"
+    DEPLOY_NAMESPACE: "$K8S_NAMESPACE"        # set K8S_NAMESPACE in GitLab Settings → CI/CD → Variables to your existing OpenShift namespace
+    VALUES_FILE: "values-production.yaml"
+    HELM_KUBEAPISERVER: "$PROD_SERVER"        # replace PROD_SERVER with your GitLab CI variable for the production cluster URL
+    HELM_KUBETOKEN: "$PROD_TOKEN"             # replace PROD_TOKEN with your GitLab CI variable for the production auth token
+    HELM_KUBEINSECURE_SKIP_TLS_VERIFY: "true"
   script:
-    - |
-      set -e
-
-      SET_ARGS=""
-      if [ "$BACKEND_CHANGED" = "1" ]; then
-        echo "→ Pinning $BACKEND_HELM_KEY → $CI_COMMIT_TAG"
-        SET_ARGS="$SET_ARGS --helm-set $BACKEND_HELM_KEY.image.tag=$CI_COMMIT_TAG"
-      else
-        echo "→ Backend unchanged since $PREV_TAG, leaving its image tag as-is"
-      fi
-
-      if [ "$FRONTEND_CHANGED" = "1" ]; then
-        echo "→ Pinning $FRONTEND_HELM_KEY → $CI_COMMIT_TAG"
-        SET_ARGS="$SET_ARGS --helm-set $FRONTEND_HELM_KEY.image.tag=$CI_COMMIT_TAG"
-      else
-        echo "→ Frontend unchanged since $PREV_TAG, leaving its image tag as-is"
-      fi
-
-      if [ "$FILEBEAT_CHANGED" = "1" ]; then
-        echo "→ Pinning $FILEBEAT_HELM_KEY → $CI_COMMIT_TAG"
-        SET_ARGS="$SET_ARGS --helm-set $FILEBEAT_HELM_KEY.image.tag=$CI_COMMIT_TAG"
-      else
-        echo "→ Filebeat unchanged since $PREV_TAG, leaving its image tag as-is"
-      fi
-      if [ "$POSTGRES_CHANGED" = "1" ]; then
-        echo "→ Pinning $POSTGRES_HELM_KEY → $CI_COMMIT_TAG"
-        SET_ARGS="$SET_ARGS --helm-set $POSTGRES_HELM_KEY.image.tag=$CI_COMMIT_TAG"
-      else
-        echo "→ Postgres unchanged since $PREV_TAG, leaving its image tag as-is"
-      fi
-
-      if [ -z "$SET_ARGS" ] && [ "$HELM_CHANGED" != "1" ]; then
-        echo "Nothing to update — exiting."
-        exit 0
-      fi
-
-      if [ -n "$SET_ARGS" ]; then
-        echo "── argocd app set ─────────────────────────────────────"
-        argocd app set "$ARGOCD_APP_PRODUCTION" $ARGOCD_OPTS $SET_ARGS
-      fi
-
-      echo "── argocd app sync ────────────────────────────────────"
-      argocd app sync "$ARGOCD_APP_PRODUCTION" $ARGOCD_OPTS --timeout 300
-      argocd app wait "$ARGOCD_APP_PRODUCTION" $ARGOCD_OPTS --timeout 300 --health --sync
+    - *deploy_script
   rules:
     - if: $CI_COMMIT_TAG
 
-# ── Deploy to DR (manual gate, mirrors production pinning) ───────────────────
-# Promotes the same image tags to the DR cluster. Run after production is
-# verified healthy. Per-app pinning follows the same BACKEND_CHANGED /
-# FRONTEND_CHANGED logic as production.
+# ── Deploy to DR (manual gate) ───────────────────────────────────────────────
 deploy:dr:
-  extends: .argocd_base
+  extends: .deploy_base
   stage: dr
   needs:
     - job: detect
@@ -188,56 +170,18 @@ deploy:dr:
       optional: true
     - job: frontend:docker:build
       optional: true
-    - job: filebeat:docker:build
-      optional: true
   when: manual
   environment:
     name: dr
-    url: $DR_URL
+    url: $DR_URL  # replace DR_URL with your GitLab CI variable for the DR environment URL
+  variables:
+    DEPLOY_ENV: "dr"
+    DEPLOY_NAMESPACE: "$K8S_NAMESPACE"        # set K8S_NAMESPACE in GitLab Settings → CI/CD → Variables to your existing OpenShift namespace
+    VALUES_FILE: "values-dr.yaml"
+    HELM_KUBEAPISERVER: "$PROD_SERVER"        # DR uses prod cluster — replace if DR has its own cluster URL variable
+    HELM_KUBETOKEN: "$PROD_TOKEN"             # DR uses prod token — replace if DR has its own token variable
+    HELM_KUBEINSECURE_SKIP_TLS_VERIFY: "true"
   script:
-    - |
-      set -e
-
-      SET_ARGS=""
-      if [ "$BACKEND_CHANGED" = "1" ]; then
-        echo "→ Pinning $BACKEND_HELM_KEY → $CI_COMMIT_TAG"
-        SET_ARGS="$SET_ARGS --helm-set $BACKEND_HELM_KEY.image.tag=$CI_COMMIT_TAG"
-      else
-        echo "→ Backend unchanged since $PREV_TAG, leaving its image tag as-is"
-      fi
-
-      if [ "$FRONTEND_CHANGED" = "1" ]; then
-        echo "→ Pinning $FRONTEND_HELM_KEY → $CI_COMMIT_TAG"
-        SET_ARGS="$SET_ARGS --helm-set $FRONTEND_HELM_KEY.image.tag=$CI_COMMIT_TAG"
-      else
-        echo "→ Frontend unchanged since $PREV_TAG, leaving its image tag as-is"
-      fi
-
-      if [ "$FILEBEAT_CHANGED" = "1" ]; then
-        echo "→ Pinning $FILEBEAT_HELM_KEY → $CI_COMMIT_TAG"
-        SET_ARGS="$SET_ARGS --helm-set $FILEBEAT_HELM_KEY.image.tag=$CI_COMMIT_TAG"
-      else
-        echo "→ Filebeat unchanged since $PREV_TAG, leaving its image tag as-is"
-      fi
-      if [ "$POSTGRES_CHANGED" = "1" ]; then
-        echo "→ Pinning $POSTGRES_HELM_KEY → $CI_COMMIT_TAG"
-        SET_ARGS="$SET_ARGS --helm-set $POSTGRES_HELM_KEY.image.tag=$CI_COMMIT_TAG"
-      else
-        echo "→ Postgres unchanged since $PREV_TAG, leaving its image tag as-is"
-      fi
-
-      if [ -z "$SET_ARGS" ] && [ "$HELM_CHANGED" != "1" ]; then
-        echo "Nothing to update — exiting."
-        exit 0
-      fi
-
-      if [ -n "$SET_ARGS" ]; then
-        echo "── argocd app set ─────────────────────────────────────"
-        argocd app set "$ARGOCD_APP_DR" $ARGOCD_OPTS $SET_ARGS
-      fi
-
-      echo "── argocd app sync ────────────────────────────────────"
-      argocd app sync "$ARGOCD_APP_DR" $ARGOCD_OPTS --timeout 300
-      argocd app wait "$ARGOCD_APP_DR" $ARGOCD_OPTS --timeout 300 --health --sync
+    - *deploy_script
   rules:
     - if: $CI_COMMIT_TAG

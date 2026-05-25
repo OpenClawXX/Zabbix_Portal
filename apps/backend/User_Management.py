@@ -311,20 +311,23 @@ def get_team_name(team_id: int) -> str | None:
 
 def seed_root():
     from Auth import hash_password
-    username = os.getenv("ADMIN_USERNAME", "admin")
-    password = os.getenv("ADMIN_PASSWORD", "admin")
+    username = os.getenv("ADMIN_USERNAME", "Admin")
+    password = os.getenv("ADMIN_PASSWORD", "zabbix")
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) AS cnt FROM team_users")
             if cur.fetchone()["cnt"] == 0:
                 cur.execute(
-                    """INSERT INTO team_users (username, email, roles, team_id, password_hash)
-                       VALUES (%s, '', %s, NULL, %s)
-                       ON CONFLICT (username) DO NOTHING""",
+                    """INSERT INTO team_users (id, username, email, roles, team_id, password_hash)
+                       OVERRIDING SYSTEM VALUE
+                       VALUES (1, %s, '', %s, NULL, %s)
+                       ON CONFLICT DO NOTHING""",
                     (username, ["root"], hash_password(password)),
                 )
-                print(f"Seeded default root user: '{username}' — change the password after first login.")
+                # Advance the sequence so the next user gets ID 2
+                cur.execute("SELECT setval('team_users_id_seq', 1, true)")
+                print(f"Seeded default root user: '{username}' (id=1) — change the password after first login.")
         conn.commit()
     except Exception as exc:
         conn.rollback()

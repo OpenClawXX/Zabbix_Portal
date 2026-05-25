@@ -40,22 +40,6 @@ service:
   type: ClusterIP
   port: 6769
 
-ingress:
-  enabled: false
-  className: ""
-  annotations: {}
-    # kubernetes.io/ingress.class: nginx
-    # kubernetes.io/tls-acme: "true"
-  hosts:
-    - host: backend.local
-      paths:
-        - path: /
-          pathType: Prefix
-  tls: []
-  #  - secretName: backend-tls
-  #    hosts:
-  #      - backend.local
-
 resources:
   requests:
     cpu: 100m
@@ -95,16 +79,13 @@ tolerations: []
 
 affinity: {}
 
-# Environment variables injected directly into the container
-env:
-  ZABBIX_URL: ""
-  ZABBIX_USER: ""
+existingSecret: ""  # leave empty — Helm renders the secret from values below
 
-# If set, this existing Secret will be used as envFrom secretRef
-# instead of rendering the secret.yaml template
-existingSecret: "backend-secret"
-
-# Additional arbitrary key/value pairs mounted as a ConfigMap and
-# injected via envFrom configMapRef
-config: {}
-#  MY_CONFIG_KEY: "my-config-value"
+# Secret values — pass via GitLab masked CI variables using --set at deploy time.
+# Never hardcode real values here.
+secret:
+  zabbixUrl: ""     # ZABBIX_URL GitLab CI variable
+  zabbixUser: ""    # ZABBIX_USER GitLab CI variable
+  zabbixPass: ""    # ZABBIX_PASS GitLab CI variable (masked)
+  secretKey: ""     # SECRET_KEY GitLab CI variable (masked)
+  databaseUrl: ""   # DATABASE_URL GitLab CI variable (masked)

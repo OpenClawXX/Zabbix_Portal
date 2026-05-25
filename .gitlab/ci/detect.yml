@@ -8,10 +8,9 @@
 # the comparison base is always the most recent ancestor tag — never HEAD~1
 # or a branch SHA.
 #
-# Outputs (consumed by python.yml, node.yml, elastic.yml, gitops.yml):
-#   BACKEND_CHANGED   = "1" if anything under $BACKEND_PATH changed
-#   FRONTEND_CHANGED  = "1" if anything under $FRONTEND_PATH or root JS config changed
-#   FILEBEAT_CHANGED  = "1" if anything under $FILEBEAT_PATH changed
+# Outputs (consumed by python.yml, node.yml, gitops.yml):
+#   BACKEND_CHANGED   = "1" if anything under apps/backend/ changed
+#   FRONTEND_CHANGED  = "1" if anything under apps/frontend/ or root JS config changed
 #   HELM_CHANGED      = "1" if anything under helm/ changed
 #   PREV_TAG          = the tag we diffed against (empty on first-ever release)
 # =============================================================================
@@ -37,18 +36,19 @@ detect:
 
       BACKEND_CHANGED=0
       FRONTEND_CHANGED=0
-      FILEBEAT_CHANGED=0
-      POSTGRES_CHANGED=0
       HELM_CHANGED=0
 
-      if [ -z "$PREV_TAG" ]; then
+      if [ -n "$FORCE_BUILD" ] && [ "$FORCE_BUILD" != "0" ]; then
+        echo "→ FORCE_BUILD=1: marking all apps as changed."
+        BACKEND_CHANGED=1
+        FRONTEND_CHANGED=1
+        HELM_CHANGED=1
+      elif [ -z "$PREV_TAG" ]; then
         # First tag — there is no prior release to diff against.
         # Treat everything as new so all apps build and deploy.
         echo "→ First tag: marking all apps as changed."
         BACKEND_CHANGED=1
         FRONTEND_CHANGED=1
-        FILEBEAT_CHANGED=1
-        POSTGRES_CHANGED=1
         HELM_CHANGED=1
       else
         CHANGED=$(git diff --name-only "$PREV_TAG" "$CI_COMMIT_TAG")
@@ -57,24 +57,19 @@ detect:
         echo "$CHANGED"
         echo "──────────────────────────────────────────────────────"
 
-        echo "$CHANGED" | grep -q "^${BACKEND_PATH}/"  && BACKEND_CHANGED=1
-        echo "$CHANGED" | grep -q "^${FRONTEND_PATH}/" && FRONTEND_CHANGED=1
-        echo "$CHANGED" | grep -q "^${FILEBEAT_PATH}/" && FILEBEAT_CHANGED=1
-        echo "$CHANGED" | grep -q "^${POSTGRES_PATH}/" && POSTGRES_CHANGED=1
+        echo "$CHANGED" | grep -q "^apps/backend/"  && BACKEND_CHANGED=1
+        echo "$CHANGED" | grep -q "^apps/frontend/" && FRONTEND_CHANGED=1
 
         # Root workspace config files that affect all frontend builds.
-        # Update ROOT_JS_CONFIGS in common.yml if you change the toolchain.
-        echo "$CHANGED" | grep -qE "^(${ROOT_JS_CONFIGS})$" && FRONTEND_CHANGED=1
+        echo "$CHANGED" | grep -qE "^(package\.json|package-lock\.json|biome\.json|\.npmrc)$" && FRONTEND_CHANGED=1
 
-        # Helm chart changes — anything under $HELM_PATH
-        echo "$CHANGED" | grep -q "^${HELM_PATH}/" && HELM_CHANGED=1
+        # Helm chart changes — anything under helm/charts
+        echo "$CHANGED" | grep -q "^helm/charts/" && HELM_CHANGED=1
       fi
 
       {
         echo "BACKEND_CHANGED=$BACKEND_CHANGED"
         echo "FRONTEND_CHANGED=$FRONTEND_CHANGED"
-        echo "FILEBEAT_CHANGED=$FILEBEAT_CHANGED"
-        echo "POSTGRES_CHANGED=$POSTGRES_CHANGED"
         echo "HELM_CHANGED=$HELM_CHANGED"
         echo "PREV_TAG=$PREV_TAG"
       } > detect.env
@@ -86,5 +81,59 @@ detect:
     reports:
       dotenv: detect.env
     expire_in: 1 hour
+  rules:
+    - if: $CI_COMMIT_TAG
+
+# ── Variable validation ───────────────────────────────────────────────────────
+# Prints all pipeline variables at the start of every run so you can verify
+# their values in the job log. Sensitive variables (tokens, passwords) are
+# only checked for presence — their values are never printed.
+validate:variables:
+  extends: .base
+  stage: .pre
+  image:
+    name: alpine:latest  # PRIVATE NETWORK: replace with your internal alpine image
+    entrypoint: [""]
+  script:
+    - |
+      echo "══════════════════════════════════════════════════════"
+      echo "  Pipeline variable validation"
+      echo "══════════════════════════════════════════════════════"
+
+      echo ""
+      echo "── Project ───────────────────────────────────────────"
+      echo "  PROJECT_NAME         = $PROJECT_NAME"
+      echo "  CI_COMMIT_TAG        = $CI_COMMIT_TAG"
+      echo "  FORCE_BUILD          = $FORCE_BUILD"
+
+      echo ""
+      echo "── Namespace ─────────────────────────────────────────"
+      echo "  K8S_NAMESPACE        = $K8S_NAMESPACE"
+
+      echo ""
+      echo "── Artifactory ───────────────────────────────────────"
+      echo "  ARTIFACTORY_REGISTRY = $ARTIFACTORY_REGISTRY"
+      echo "  Images will be pushed to:"
+      echo "    $ARTIFACTORY_REGISTRY/backend:$CI_COMMIT_TAG"
+      echo "    $ARTIFACTORY_REGISTRY/frontend:$CI_COMMIT_TAG"
+
+      echo ""
+      echo "── Cluster servers ───────────────────────────────────"
+      echo "  STAGING_SERVER       = $STAGING_SERVER"
+      echo "  PROD_SERVER          = $PROD_SERVER"
+
+      echo ""
+      echo "── Cluster tokens ────────────────────────────────────"
+      echo "  STAGING_TOKEN        = $([ -n "$STAGING_TOKEN" ] && echo '*** (set)' || echo '!!! NOT SET')"
+      echo "  PROD_TOKEN           = $([ -n "$PROD_TOKEN" ] && echo '*** (set)' || echo '!!! NOT SET')"
+
+      echo ""
+      echo "── Environment URLs ──────────────────────────────────"
+      echo "  STAGING_URL          = $STAGING_URL"
+      echo "  PRODUCTION_URL       = $PRODUCTION_URL"
+      echo "  DR_URL               = $DR_URL"
+
+      echo ""
+      echo "══════════════════════════════════════════════════════"
   rules:
     - if: $CI_COMMIT_TAG

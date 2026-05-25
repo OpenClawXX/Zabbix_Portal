@@ -39,27 +39,14 @@ service:
   type: ClusterIP
   port: 42069
 
-ingress:
-  enabled: false
-  className: ""
-  annotations: {}
-  hosts:
-    - host: frontend.local
-      paths:
-        - path: /
-          pathType: Prefix
-  tls: []
+backendUrl: ""  # set to http://<release-name>-backend:6769 — passed via --set in the deploy script
 
-# The backend service name and port used when apiProxy.enabled is true.
-# backendServiceName defaults to <release-name>-backend when left empty.
-backendServiceName: ""
-backendServicePort: 6769
-
-# When enabled, the Ingress will include a second path rule that routes
-# /api/* to the backend service (path rewritten to strip /api/).
-# This replaces the nginx proxy_pass that ran inside the container.
-apiProxy:
+route:
   enabled: true
+  host: ""  # leave empty — OpenShift auto-generates the hostname from the cluster domain
+  tls:
+    enabled: false
+    termination: edge  # edge | passthrough | reencrypt
 
 resources:
   requests:

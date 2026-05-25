@@ -35,6 +35,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTheme } from "@mui/material/styles";
 import { useAuth } from "../app/context/AuthContext";
 import { api, type Host, type Team, type TeamUser } from "../app/api";
+import { useSync } from "../app/context/SyncContext";
 
 type Snack = { msg: string; sev: "success" | "error" };
 
@@ -105,6 +106,7 @@ const roleColor = (r: string): "error" | "primary" | "secondary" | "warning" | "
 const roleLabel = (r: string) => (r === "team_lead" ? "Team Lead" : r.charAt(0).toUpperCase() + r.slice(1));
 
 export const Teams = () => {
+  const { lastSync } = useSync();
   const [teams, setTeams] = useState<Team[]>([]);
   const [allHosts, setAllHosts] = useState<Host[]>([]);
   const [loading, setLoading] = useState(false);
@@ -149,7 +151,7 @@ export const Teams = () => {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); }, [load, lastSync]);
 
   // ── Derived: hosts not assigned to any team ──────────────────────────
   const assignedHostnames = new Set(teams.flatMap((t) => t.hosts));

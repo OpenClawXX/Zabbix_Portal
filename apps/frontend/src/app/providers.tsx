@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import { useMemo } from "react";
 import type { PropsWithChildren } from "react";
 import { AuthProvider } from "./context/AuthContext";
+import { SyncProvider } from "./context/SyncContext";
 import { ThemeModeProvider, useThemeMode } from "./context/ThemeContext";
 import { AppShell } from "./layout/AppShell";
 import { createAppTheme } from "./theme";
@@ -25,7 +26,9 @@ const ThemedApp = ({ children }: PropsWithChildren) => {
 export const Providers = ({ children }: PropsWithChildren) => (
   <AuthProvider>
     <ThemeModeProvider>
-      <ThemedApp>{children}</ThemedApp>
+      <SyncProvider>
+        <ThemedApp>{children}</ThemedApp>
+      </SyncProvider>
     </ThemeModeProvider>
   </AuthProvider>
 );

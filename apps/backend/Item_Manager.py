@@ -5,10 +5,11 @@ class Item_Manager(Zabbix_Base):
         super().__init__()
         print("Item Manager ready.")
 
-    def add_item(self, hostname, item_name, item_key, value_type=3):
+    def add_item(self, hostname, item_name, item_key, value_type=3, team_name: str = ""):
         """
         Adds a new monitoring item to an existing host.
         value_type: 0=float, 1=string, 2=log, 3=integer, 4=text
+        team_name: when set, tags the item with {"tag": "team", "value": team_name}
         """
         if not self.zapi:
             print("❌ No API connection available.")
@@ -33,7 +34,8 @@ class Item_Manager(Zabbix_Base):
                 return None
             interface_id = interfaces[0]['interfaceid']
 
-            # 3. Create the item
+            # 3. Create the item, tagging with team label when available (Zabbix 5.4+)
+            tags = [{"tag": "team", "value": team_name}] if team_name else []
             result = self.zapi.item.create(
                 name=item_name,
                 key_=item_key,
@@ -41,7 +43,8 @@ class Item_Manager(Zabbix_Base):
                 interfaceid=interface_id,
                 type=0,              # Zabbix Agent (Passive)
                 value_type=value_type,
-                delay="1m"
+                delay="1m",
+                tags=tags,
             )
             item_id = result['itemids'][0]
             print(f"✅ Item '{item_name}' (key: {item_key}) added to '{hostname}' (ID: {item_id})")
@@ -111,6 +114,7 @@ class Item_Manager(Zabbix_Base):
             items = self.zapi.item.get(
                 hostids=host_data[0]["hostid"],
                 output=["itemid", "name", "key_", "value_type", "delay"],
+                selectTags=["tag", "value"],
                 inherited=False,
             )
             return items

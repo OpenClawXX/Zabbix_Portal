@@ -1,4 +1,6 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Depends
+import asyncio
+
+from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
@@ -7,7 +9,8 @@ import pandas as pd
 
 from Host_Manager import Host_Manager
 from Item_Manager import Item_Manager
-from Database import init_db
+from ZabbixSync import ZabbixSync
+from Database import init_db, install_notify_triggers
 from Auth import (
     hash_password, verify_password, create_token,
     get_current_user, require_admin, require_operator, require_root,
@@ -23,8 +26,32 @@ app = FastAPI(
 )
 host_bot = Host_Manager()
 item_bot = Item_Manager()
+sync_bot = ZabbixSync()
 init_db()
+install_notify_triggers()
 um.seed_root()
+sync_bot.pull_users()
+sync_bot.bootstrap_teams()
+
+# ── SSE: real-time push to connected frontend clients ─────────────────
+_sync_subscribers: set[asyncio.Queue] = set()
+_event_loop: asyncio.AbstractEventLoop | None = None
+
+@app.on_event("startup")
+async def _on_startup():
+    global _event_loop
+    _event_loop = asyncio.get_running_loop()
+
+def _notify_sync_clients():
+    """Thread-safe: called from sync thread to push a sync event to all SSE clients."""
+    if not _event_loop:
+        return
+    for q in list(_sync_subscribers):
+        _event_loop.call_soon_threadsafe(q.put_nowait, "sync")
+
+sync_bot._on_sync = _notify_sync_clients
+sync_bot.start_realtime_sync()
+sync_bot.start_background_sync()
 
 # Retroactively tag any hosts that were assigned before tagging was introduced
 def _sync_tags():
@@ -65,6 +92,73 @@ class TriggerRequest(BaseModel):
 def health():
     """Returns whether the API is up and connected to Zabbix."""
     return {"status": "online", "zabbix_connected": host_bot.zapi is not None}
+
+
+@app.post("/sync", tags=["Status"], summary="Trigger full Zabbix sync now")
+def trigger_sync(current_user: dict = Depends(require_root)):
+    """Immediately runs a full bidirectional sync (users, groups, hosts).
+    Normally runs automatically every ZABBIX_SYNC_INTERVAL seconds."""
+    sync_bot.full_sync()
+    return {"message": "Sync complete."}
+
+
+@app.get("/sync/debug/{team_name}", tags=["Status"], summary="Show Zabbix state for a team")
+def debug_team_sync(team_name: str, current_user: dict = Depends(require_root)):
+    """Returns the Zabbix user group, host group, permissions, and hosts for a team."""
+    if not sync_bot.zapi:
+        raise HTTPException(status_code=503, detail="Zabbix not connected.")
+    result: dict = {"team": team_name}
+    try:
+        rights_param = "selectHostGroupRights" if sync_bot._rights_field == "hostgroup_rights" else "selectRights"
+        ug = sync_bot.zapi.usergroup.get(
+            filter={"name": team_name},
+            output=["usrgrpid", "name"],
+            **{rights_param: ["id", "permission"]},
+        )
+        result["user_group"] = ug[0] if ug else None
+    except Exception as e:
+        result["user_group_error"] = repr(e)
+    try:
+        hg = sync_bot.zapi.hostgroup.get(
+            filter={"name": team_name},
+            output=["groupid", "name"],
+        )
+        result["host_group"] = hg[0] if hg else None
+        if hg:
+            hosts_in_group = sync_bot.zapi.host.get(
+                groupids=[hg[0]["groupid"]],
+                output=["hostid", "host"],
+            )
+            result["hosts_in_group"] = hosts_in_group
+    except Exception as e:
+        result["host_group_error"] = repr(e)
+    return result
+
+
+@app.get("/events", tags=["Status"], summary="SSE stream for real-time sync events")
+async def sse_events(request: Request, current_user: dict = Depends(get_current_user)):
+    """Server-Sent Events stream. Sends 'data: sync' whenever a full_sync completes."""
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    _sync_subscribers.add(queue)
+
+    async def _stream():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=25.0)
+                    yield f"data: {event}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        finally:
+            _sync_subscribers.discard(queue)
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/hosts", tags=["Hosts"], summary="List All Hosts")
@@ -206,7 +300,9 @@ def delete_trigger(triggerid: str, current_user: dict = Depends(require_operator
 @app.post("/items", tags=["Items"], summary="Add Monitoring Item", status_code=201)
 def add_item(data: ItemRequest, current_user: dict = Depends(require_operator)):
     """Adds a monitoring item (metric) to an existing host."""
-    result = item_bot.add_item(data.hostname, data.item_name, data.item_key, data.value_type)
+    team_id = current_user.get("team_id")
+    team_name = um.get_team_name(team_id) if team_id else None
+    result = item_bot.add_item(data.hostname, data.item_name, data.item_key, data.value_type, team_name or "")
     if not result:
         raise HTTPException(status_code=400, detail="Failed to add item. Check host name and key.")
     return {"message": "Item added successfully.", "itemid": result}
@@ -294,12 +390,16 @@ def create_team(data: TeamRequest, current_user: dict = Depends(require_root)):
     result = um.create_team(data.name, data.description or "")
     if not result:
         raise HTTPException(status_code=400, detail="Failed to create team. Name may already exist.")
+    sync_bot.push_team(data.name)
     return result
 
 @app.delete("/teams/{team_id}", tags=["Teams"], summary="Delete team")
 def delete_team(team_id: int, current_user: dict = Depends(require_root)):
+    team_name = um.get_team_name(team_id)
     if not um.delete_team(team_id):
         raise HTTPException(status_code=404, detail="Team not found.")
+    if team_name:
+        sync_bot.delete_team(team_name)
     return {"message": "Team deleted."}
 
 @app.post("/teams/{team_id}/hosts", tags=["Teams"], summary="Assign host to team", status_code=201)
@@ -311,15 +411,19 @@ def assign_host(team_id: int, data: HostAssignRequest, current_user: dict = Depe
     team_name = um.get_team_name(team_id)
     if team_name:
         host_bot.tag_host(data.hostname, team_name)
+        sync_bot.push_host_to_team(data.hostname, team_name)
     return {"message": "Host assigned."}
 
 @app.delete("/teams/{team_id}/hosts/{hostname}", tags=["Teams"], summary="Remove host from team")
 def unassign_host(team_id: int, hostname: str, current_user: dict = Depends(require_admin)):
     if "root" not in current_user.get("roles", []) and current_user.get("team_id") != team_id:
         raise HTTPException(status_code=403, detail="You can only remove hosts from your own team.")
+    team_name = um.get_team_name(team_id)
     if not um.unassign_host(hostname):
         raise HTTPException(status_code=404, detail="Host assignment not found.")
     host_bot.untag_host(hostname)
+    if team_name:
+        sync_bot.remove_host_from_team(hostname, team_name)
     return {"message": "Host removed from team."}
 
 # ── Users routes ──────────────────────────────────────────────────────
@@ -346,28 +450,37 @@ def update_user(user_id: int, data: UserUpdateRequest, current_user: dict = Depe
         raise HTTPException(status_code=403, detail="You cannot assign roles higher than your own.")
     if not um.update_user_profile(user_id, data.roles, data.team_id):
         raise HTTPException(status_code=400, detail="Failed to update user.")
+    team_name = um.get_team_name(data.team_id) if data.team_id else None
+    sync_bot.push_user(target["username"], "", data.roles, team_name)
     return {"message": "User updated."}
 
 
 @app.post("/users", tags=["Teams"], summary="Create user", status_code=201)
 def create_user(data: UserRequest, current_user: dict = Depends(require_admin)):
+    if len(data.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters long.")
     if "root" not in current_user.get("roles", []) and data.team_id != current_user.get("team_id"):
         raise HTTPException(status_code=403, detail="You can only create users in your own team.")
     if not can_grant_roles(current_user.get("roles", []), data.roles or ["member"]):
         raise HTTPException(status_code=403, detail="You cannot assign roles higher than your own.")
+    roles = data.roles or ["member"]
     result = um.create_user(
         data.username,
         hash_password(data.password),
         data.email or "",
-        data.roles or ["member"],
+        roles,
         data.team_id,
     )
     if not result:
         raise HTTPException(status_code=400, detail="Failed to create user. Username may already exist.")
+    team_name = um.get_team_name(data.team_id) if data.team_id else None
+    sync_bot.push_user(data.username, data.password, roles, team_name)
     return result
 
 @app.put("/users/{user_id}/password", tags=["Teams"], summary="Change user password")
 def change_password(user_id: int, data: PasswordChangeRequest, current_user: dict = Depends(require_admin)):
+    if len(data.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters long.")
     target = um.get_user_by_id(user_id)
     if not target:
         raise HTTPException(status_code=404, detail="User not found.")
@@ -375,16 +488,19 @@ def change_password(user_id: int, data: PasswordChangeRequest, current_user: dic
         raise HTTPException(status_code=403, detail="You can only change passwords for users in your own team.")
     if not um.update_password(user_id, hash_password(data.new_password)):
         raise HTTPException(status_code=400, detail="Failed to update password.")
+    sync_bot.update_password(target["username"], data.new_password)
     return {"message": "Password updated."}
 
 @app.delete("/users/{user_id}", tags=["Teams"], summary="Delete user")
 def delete_user(user_id: int, current_user: dict = Depends(require_admin)):
-    if "root" not in current_user.get("roles", []):
-        target = um.get_user_by_id(user_id)
-        if not target or target.get("team_id") != current_user.get("team_id"):
-            raise HTTPException(status_code=403, detail="You can only delete users in your own team.")
+    target = um.get_user_by_id(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+    if "root" not in current_user.get("roles", []) and target.get("team_id") != current_user.get("team_id"):
+        raise HTTPException(status_code=403, detail="You can only delete users in your own team.")
     if not um.delete_user(user_id):
         raise HTTPException(status_code=404, detail="User not found.")
+    sync_bot.delete_user(target["username"])
     return {"message": "User deleted."}
 
 # ── Runner ────────────────────────────────────────────────────────────

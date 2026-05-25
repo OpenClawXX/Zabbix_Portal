@@ -10,18 +10,15 @@ backend:
 
   replicaCount: 1
 
+  serviceAccount:
+    create: false
+
+  podSecurityContext: {}
+
+  securityContext: {}
+
   ingress:
-    enabled: true
-    className: nginx
-    annotations:
-      nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
-      nginx.ingress.kubernetes.io/proxy-read-timeout: "90"
-    hosts:
-      - host: api.backend.local
-        paths:
-          - path: /
-            pathType: Prefix
-    tls: []
+    enabled: false
 
   resources:
     requests:
@@ -51,27 +48,19 @@ frontend:
 
   replicaCount: 1
 
-  # apiProxy routes /api/* to the backend service at the Ingress level.
-  # The backend service name is auto-derived as <release-name>-backend.
-  # Override backendServiceName only if the backend is deployed separately.
-  apiProxy:
-    enabled: true
-  backendServiceName: ""
-  backendServicePort: 6769
+  serviceAccount:
+    create: false
 
-  ingress:
+  podSecurityContext: {}
+
+  securityContext: {}
+
+  route:
     enabled: true
-    className: nginx
-    annotations:
-      nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
-      nginx.ingress.kubernetes.io/proxy-read-timeout: "90"
-      nginx.ingress.kubernetes.io/rewrite-target: /$2
-    hosts:
-      - host: frontend.local
-        paths:
-          - path: /
-            pathType: Prefix
-    tls: []
+    host: ""  # leave empty — OpenShift auto-generates the hostname from the cluster domain
+    tls:
+      enabled: false
+      termination: edge
 
   resources:
     requests:
@@ -81,36 +70,19 @@ frontend:
       cpu: 200m
       memory: 256Mi
 
-filebeat:
-  image:
-    # PRIVATE NETWORK: replace with your internal Artifactory / Nexus mirror.
-    # Keep the tag in sync with FILEBEAT_VERSION in .gitlab/ci/common.yml.
-    repository: your-registry/filebeat
-    tag: latest
-    pullPolicy: IfNotPresent
-
-  elasticsearch:
-    # UPDATE ME: set to your existing Elasticsearch server URL.
-    # e.g. https://elasticsearch.internal.example.com:9200
-    hosts: ""
-    username: "elastic"
-    existingSecret: "filebeat-elasticsearch-secret"
-    secretKey: "ELASTICSEARCH_PASSWORD"
-
-  resources:
-    requests:
-      cpu: 100m
-      memory: 100Mi
-    limits:
-      cpu: 200m
-      memory: 200Mi
-
 postgres:
   image:
     # PRIVATE NETWORK: replace with your internal Artifactory / Nexus mirror.
     repository: your-registry/postgres
     tag: "16"
     pullPolicy: IfNotPresent
+
+  serviceAccount:
+    create: false
+
+  podSecurityContext: {}
+
+  securityContext: {}
 
   auth:
     database: zabbix_portal

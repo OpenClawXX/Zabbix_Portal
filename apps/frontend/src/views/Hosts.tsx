@@ -19,10 +19,12 @@ import { DataGrid, type GridColDef } from "@mui/x-data-grid";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTheme } from "@mui/material/styles";
 import { type Host, api } from "../app/api";
+import { useSync } from "../app/context/SyncContext";
 
 export const Hosts = () => {
   const theme = useTheme();
   const isDark = theme.palette.mode === "dark";
+  const { lastSync } = useSync();
   const [hostname, setHostname] = useState("");
   const [ip, setIp] = useState("");
   const [template, setTemplate] = useState("Linux by Zabbix agent");
@@ -59,7 +61,7 @@ export const Hosts = () => {
 
   useEffect(() => {
     void reload();
-  }, [reload]);
+  }, [reload, lastSync]);
 
   const onCreate = async () => {
     try {
