@@ -79,13 +79,8 @@ tolerations: []
 
 affinity: {}
 
-existingSecret: ""  # leave empty — Helm renders the secret from values below
+existingSecret: ""      # name of a pre-existing Secret to load env vars from (leave empty to use Helm-rendered secret below)
+existingConfigMap: ""   # name of a pre-existing ConfigMap to load env vars from (leave empty to use Helm-rendered configmap below)
 
 # Secret values — pass via GitLab masked CI variables using --set at deploy time.
 # Never hardcode real values here.
-secret:
-  zabbixUrl: ""     # ZABBIX_URL GitLab CI variable
-  zabbixUser: ""    # ZABBIX_USER GitLab CI variable
-  zabbixPass: ""    # ZABBIX_PASS GitLab CI variable (masked)
-  secretKey: ""     # SECRET_KEY GitLab CI variable (masked)
-  databaseUrl: ""   # DATABASE_URL GitLab CI variable (masked)

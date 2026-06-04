@@ -2,6 +2,7 @@ from Zabbix_Base import Zabbix_Base
 import openpyxl
 from io import BytesIO
 
+
 class Host_Manager(Zabbix_Base):
     def __init__(self):
         super().__init__()
@@ -32,28 +33,24 @@ class Host_Manager(Zabbix_Base):
 
         # Try exact match by internal host name first
         templates = self.zapi.template.get(
-            filter={"host": template_name},
-            output=["templateid", "host", "name"]
+            filter={"host": template_name}, output=["templateid", "host", "name"]
         )
 
         # Fallback: search by visible name
         if not templates:
             templates = self.zapi.template.get(
-                filter={"name": template_name},
-                output=["templateid", "host", "name"]
+                filter={"name": template_name}, output=["templateid", "host", "name"]
             )
 
         # Dynamic fallback: partial match (case-insensitive).
         # Zabbix API supports 'search' for substring matching.
         if not templates:
             templates = self.zapi.template.get(
-                search={"host": template_name},
-                output=["templateid", "host", "name"]
+                search={"host": template_name}, output=["templateid", "host", "name"]
             )
         if not templates:
             templates = self.zapi.template.get(
-                search={"name": template_name},
-                output=["templateid", "host", "name"]
+                search={"name": template_name}, output=["templateid", "host", "name"]
             )
 
         if not templates:
@@ -88,7 +85,9 @@ class Host_Manager(Zabbix_Base):
     # PUBLIC API
     # ------------------------------------------------------------------
 
-    def create_server(self, hostname, ip_address, group_id="2", template_name="Linux by Zabbix agent"):
+    def create_server(
+        self, hostname, ip_address, group_id="2", template_name="Linux by Zabbix agent"
+    ):
         """Creates a host in Zabbix and links it to a template."""
         if not self.zapi:
             print("❌ No API connection available.")
@@ -101,18 +100,20 @@ class Host_Manager(Zabbix_Base):
         try:
             result = self.zapi.host.create(
                 host=hostname,
-                interfaces=[{
-                    "type": 1,
-                    "main": 1,
-                    "useip": 1,
-                    "ip": ip_address,
-                    "dns": "",
-                    "port": "10050"
-                }],
+                interfaces=[
+                    {
+                        "type": 1,
+                        "main": 1,
+                        "useip": 1,
+                        "ip": ip_address,
+                        "dns": "",
+                        "port": "10050",
+                    }
+                ],
                 groups=[{"groupid": group_id}],
-                templates=[{"templateid": tid}]
+                templates=[{"templateid": tid}],
             )
-            host_id = result['hostids'][0]
+            host_id = result["hostids"][0]
             print(f"✅ Created host: {hostname} (ID: {host_id})")
             return host_id
 
@@ -128,15 +129,14 @@ class Host_Manager(Zabbix_Base):
 
         try:
             host_data = self.zapi.host.get(
-                filter={"host": [hostname]},
-                output=["hostid"]
+                filter={"host": [hostname]}, output=["hostid"]
             )
 
             if not host_data:
                 print(f"⚠️ Host '{hostname}' not found.")
                 return False
 
-            host_id = host_data[0]['hostid']
+            host_id = host_data[0]["hostid"]
             self.zapi.host.delete([host_id])
             print(f"🗑️ Deleted host: {hostname} (ID: {host_id})")
             return True
@@ -151,7 +151,10 @@ class Host_Manager(Zabbix_Base):
             return []
 
         try:
-            kwargs: dict = {"output": ["hostid", "host", "name", "status"]}
+            kwargs: dict = {
+                "output": ["hostid", "host", "name", "status"],
+                "selectInterfaces": ["ip", "port", "type", "available"],
+            }
             if team_name:
                 kwargs["tags"] = [{"tag": "team", "value": team_name, "operator": 1}]
             hosts = self.zapi.host.get(**kwargs)
@@ -231,14 +234,23 @@ class Host_Manager(Zabbix_Base):
         try:
             hosts = self.zapi.host.get(
                 output=["hostid", "host", "name", "status"],
-                selectInterfaces=["ip", "port"]
+                selectInterfaces=["ip", "port"],
             )
 
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Zabbix Hosts"
 
-            ws.append(["Host ID", "Technical Name", "Visible Name", "Status", "IP Address", "Port"])
+            ws.append(
+                [
+                    "Host ID",
+                    "Technical Name",
+                    "Visible Name",
+                    "Status",
+                    "IP Address",
+                    "Port",
+                ]
+            )
 
             for h in hosts:
                 ip = h["interfaces"][0]["ip"] if h.get("interfaces") else "N/A"

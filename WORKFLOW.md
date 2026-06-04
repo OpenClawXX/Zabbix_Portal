@@ -6,9 +6,14 @@ A complete walkthrough of how the Zabbix Portal codebase moves from a developer'
 2. The local development workflow
 3. The Git branching model
 4. The GitLab CI pipeline (every stage, every job, every trigger)
-5. The container build and image promotion strategy
-6. The ArgoCD deployment flow (staging / production / DR)
+5. The container build and image strategy
+6. The Helm deployment flow (staging / production / DR)
 7. How a single code change traverses all of the above
+
+> **Deployment today runs via direct `helm upgrade --install` from GitLab CI.**
+> ArgoCD manifests live in `argocd/` and are the planned future deploy path, but
+> they are **not yet wired into the pipeline** — the CI talks to each cluster's
+> API directly with a kube token. See §6.
 
 ---
 
@@ -19,21 +24,21 @@ A complete walkthrough of how the Zabbix Portal codebase moves from a developer'
 ```mermaid
 flowchart LR
     Browser["Browser\n(React SPA)"]
-    Ingress["Ingress /\nOpenShift Route"]
+    Route["OpenShift Route /\nIngress"]
     Frontend["frontend pod\nNext.js standalone, port 42069"]
     Backend["FastAPI\nport 6769"]
     ZabbixAPI["Zabbix API\nJSON-RPC"]
 
-    Browser -- "HTTPS" --> Ingress
-    Ingress -- "/" --> Frontend
-    Ingress -- "/api/*" --> Backend
+    Browser -- "HTTPS" --> Route
+    Route -- "/" --> Frontend
+    Route -- "/api/*" --> Backend
     Backend -- "JSON-RPC" --> ZabbixAPI
 ```
 
-- The Ingress splits traffic by path: `/api/*` → backend, everything else → frontend.
-- The frontend container does **not** proxy API calls in-cluster — routing is handled by the Ingress.
+- The Route/Ingress splits traffic by path: `/api/*` → backend, everything else → frontend.
+- The frontend container does **not** proxy API calls in-cluster — routing is handled by the Route/Ingress.
 
-### In standalone Docker (local or staging)
+### In standalone Docker (local)
 
 ```mermaid
 flowchart LR
@@ -56,14 +61,20 @@ flowchart LR
 
 Same route handler, same `BACKEND_URL` mechanism — Next.js loads `.env` automatically during `npm run dev`.
 
+### Real-time updates
+
+The backend exposes a Server-Sent Events stream at `/events`. The frontend's `SyncContext` subscribes to it and re-fetches data whenever the backend completes a Zabbix sync, so the UI reflects external changes without a manual refresh.
+
 ---
 
 ## 2. Local development workflow
 
 ### First-time setup
 
+PostgreSQL is a **shared/external** database — point `DATABASE_URL` at it. For a throwaway local DB:
+
 ```bash
-# 1. Start PostgreSQL (or use docker compose — see below)
+# 1. Start a local PostgreSQL (or point DATABASE_URL at your shared instance)
 docker run -d --name pg -p 5432:5432 \
   -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=zabbix_portal \
   postgres:16
@@ -75,7 +86,8 @@ docker run -d --name pg -p 5432:5432 \
 ### Daily loop
 
 ```bash
-# Option A — run everything with docker compose (from repo root)
+# Option A — run both app containers with docker compose (from repo root)
+#            (postgres is external — set DATABASE_URL in apps/backend/.env)
 docker compose up -d --build
 
 # Option B — run each service manually in separate terminals
@@ -88,7 +100,8 @@ uvicorn Zabbix_Main:app --host 0.0.0.0 --port 6769 --reload
 npm run dev   # Next.js on :42069
 ```
 
-On first backend startup the schema is created automatically and an `admin`/`admin` root user is seeded.
+On first backend startup the schema is created automatically and a root user is seeded
+(`ADMIN_USERNAME` / `ADMIN_PASSWORD`, default `Admin` / `admin`). Change the password after first login.
 
 ### Pre-commit checks
 
@@ -101,15 +114,13 @@ npm run typecheck  # tsc
 ruff check . && mypy . --ignore-missing-imports
 ```
 
-### Editing Helm or ArgoCD
+### Editing Helm
 
 ```bash
 helm dependency build helm/charts/zabbix-portal/
 helm template zabbix-portal helm/charts/zabbix-portal/ --debug | less
 helm lint helm/charts/{backend,frontend,zabbix-portal}
 ```
-
-For ArgoCD manifests, validate with `kubectl apply --dry-run=client -f argocd/`.
 
 ---
 
@@ -125,145 +136,155 @@ For ArgoCD manifests, validate with `kubectl apply --dry-run=client -f argocd/`.
 Workflow: branch off `main` → develop → lint/typecheck locally → open MR → review → squash-merge to `main` → **tag** to release.
 
 > **The tag is the release.** Branch pushes and MR merges do nothing in CI. Only a `git push origin vX.Y.Z` fires the pipeline.
+> (`FORCE_BUILD=1` can be used to run a build/deploy from a branch without a tag — it falls back to the short SHA as the image tag.)
 
 ---
 
 ## 4. GitLab CI pipeline
 
-The pipeline is modular. `.gitlab-ci.yml` declares stages and includes six files:
+The pipeline is modular. `.gitlab-ci.yml` declares stages and includes five files:
 
 ```yaml
-stages: [.pre, lint, build, staging, production, dr, cleanup]
+stages: [.pre, lint, build, staging, production, dr]
 include:
-  - .gitlab/ci/common.yml    # ALL project-specific variables — the only file to edit per project
-  - .gitlab/ci/detect.yml    # change detection
+  - .gitlab/ci/common.yml    # reusable job templates (runner tag, Kaniko base image)
+  - .gitlab/ci/detect.yml    # change detection + variable validation
   - .gitlab/ci/python.yml    # backend jobs
   - .gitlab/ci/node.yml      # frontend jobs
-  - .gitlab/ci/elastic.yml   # Filebeat jobs
-  - .gitlab/ci/gitops.yml    # helm lint + ArgoCD deploy jobs
-  - .gitlab/ci/cleanup.yml   # registry cleanup
+  - .gitlab/ci/gitops.yml    # helm lint/template + helm deploy jobs
 ```
 
 ### Pipeline overview
 
 ```mermaid
 flowchart TD
-    Tag["git push tag vX.Y.Z"] --> Pre["**.pre** — detect\ncompare prev tag → this tag"]
-    Pre --> Lint["**lint**\nruff · mypy · biome · helm lint"]
-    Lint --> Build["**build**\ndocker build + push images"]
-    Build --> Staging["**staging**\nargocd sync staging (auto)"]
-    Staging --> Production["**production**\nargocd set + sync (manual ▶)"]
-    Production --> DR["**dr**\nargocd sync DR cluster (manual ▶)"]
-    DR --> Cleanup["**cleanup**\nregistry prune (manual ▶)"]
+    Tag["git push tag vX.Y.Z"] --> Pre["**.pre** — detect + validate\ncompare prev tag → this tag"]
+    Pre --> Lint["**lint**\nruff · mypy · biome · tsc · helm lint/template"]
+    Lint --> Build["**build**\nKaniko build + push images"]
+    Build --> Staging["**staging**\nhelm upgrade --install (auto)"]
+    Staging --> Production["**production**\nhelm upgrade --install (manual ▶)"]
+    Production --> DR["**dr**\nhelm upgrade --install on DR (manual ▶)"]
 ```
 
-### 4.1 Stage `.pre` — change detection (`detect.yml`)
+### 4.1 Stage `.pre` — change detection + validation (`detect.yml`)
 
-Runs once at the start of every tag pipeline. Compares the current tag against the most recent ancestor tag and writes four booleans to a dotenv artifact:
+`detect` runs once at the start of every tag pipeline. It compares the current tag against the most recent ancestor tag and writes three booleans (+ the previous tag) to a dotenv artifact:
 
 ```
 BACKEND_CHANGED=1
 FRONTEND_CHANGED=0
-FILEBEAT_CHANGED=0
 HELM_CHANGED=0
 PREV_TAG=v1.3.0
 ```
 
-All downstream jobs consume these vars via `artifacts: reports: dotenv`. Jobs for unchanged apps are skipped entirely.
+All downstream jobs consume these vars via `artifacts: reports: dotenv`. Jobs for unchanged apps are skipped entirely. On the first-ever tag (or with `FORCE_BUILD=1`) everything is marked changed.
+
+`validate:variables` also runs in `.pre`. It prints all pipeline variables and **hard-fails** if any required cluster variable (`K8S_NAMESPACE`, `STAGING_SERVER`, `PROD_SERVER`, `STAGING_TOKEN`, `PROD_TOKEN`) is missing — surfacing misconfiguration early instead of as a cryptic Helm error later.
 
 ### 4.2 Stage `lint` — fast-fail static checks
 
 | Job                  | Image              | Runs when            | What it does                         |
 | -------------------- | ------------------ | -------------------- | ------------------------------------ |
-| `backend:lint`       | `python:3.12-slim` | `BACKEND_CHANGED=1`  | `ruff check .` + `ruff format --check .` |
-| `backend:typecheck`  | `python:3.12-slim` | `BACKEND_CHANGED=1`  | `mypy . --ignore-missing-imports`    |
-| `frontend:lint`      | `node:22-alpine`   | `FRONTEND_CHANGED=1` | `npm run lint` (Biome)               |
-| `frontend:typecheck` | same               | `FRONTEND_CHANGED=1` | `npm run typecheck` (tsc)            |
-| `helm:lint`          | `alpine/helm`      | `HELM_CHANGED=1`     | `helm lint` on all three charts      |
-| `helm:template`      | same               | `HELM_CHANGED=1`     | `helm template` to catch render errors |
+| `backend:lint`       | internal Python    | `BACKEND_CHANGED=1`  | `ruff check .` + `ruff format --check .` |
+| `backend:typecheck`  | internal Python    | `BACKEND_CHANGED=1`  | `mypy . --ignore-missing-imports`    |
+| `frontend:lint`      | internal Node      | `FRONTEND_CHANGED=1` | `npm run lint` (Biome)               |
+| `frontend:typecheck` | internal Node      | `FRONTEND_CHANGED=1` | `npm run typecheck` (tsc)            |
+| `helm:lint`          | internal Helm      | `HELM_CHANGED=1`     | `helm lint` on all three charts      |
+| `helm:template`      | internal Helm      | `HELM_CHANGED=1`     | `helm template` to catch render errors |
+
+The lint and typecheck jobs are currently `allow_failure: true` (advisory). Remove that flag once the codebase is clean if you want them to hard-block a release.
 
 ### 4.3 Stage `build` — produce images
 
+Images are built with **Kaniko** (rootless, daemonless — works in restricted CI). Each image is pushed with a single tag: the release tag (`$CI_COMMIT_TAG`), or the short SHA on a `FORCE_BUILD`.
+
 | Job                      | Runs when            | Output                                             |
 | ------------------------ | -------------------- | -------------------------------------------------- |
-| `backend:docker:build`   | `BACKEND_CHANGED=1`  | Pushes `$BACKEND_IMAGE:$CI_COMMIT_TAG` + `:latest` |
-| `frontend:docker:build`  | `FRONTEND_CHANGED=1` | Pushes `$FRONTEND_IMAGE:$CI_COMMIT_TAG` + `:latest`|
-| `filebeat:docker:build`  | `FILEBEAT_CHANGED=1` | Pushes `$FILEBEAT_IMAGE:$CI_COMMIT_TAG` + `:latest`|
+| `backend:docker:build`   | `BACKEND_CHANGED=1`  | Pushes `<registry>/backend:$IMAGE_TAG`             |
+| `frontend:docker:build`  | `FRONTEND_CHANGED=1` | Pushes `<registry>/frontend:$IMAGE_TAG`            |
 
-All Docker jobs use `--cache-from $IMAGE:latest` and embed OCI labels for traceability.
+Kaniko layer caching is enabled (`--cache=true --cache-ttl=1440h`).
 
 ### 4.4 Stage `staging` — auto-deploy on every tag
 
-`deploy:staging` runs automatically after a successful build:
+`deploy:staging` runs automatically after a successful build. It deploys with Helm directly against the staging cluster API:
 
 ```bash
-argocd app set zabbix-portal-staging \
-  [--helm-set zabbix-portal-backend.image.tag=vX.Y.Z]
-  [--helm-set zabbix-portal-frontend.image.tag=vX.Y.Z]
-  [--helm-set zabbix-portal-filebeat.image.tag=vX.Y.Z]
-argocd app sync  zabbix-portal-staging --timeout 300
-argocd app wait  zabbix-portal-staging --health --sync --timeout 300
+helm upgrade --install "$PROJECT_NAME" "helm/charts/$PROJECT_NAME/" \
+  --namespace "$K8S_NAMESPACE" \
+  -f values.yaml -f values-staging.yaml \
+  --set backend.image.repository=<registry>/backend \
+  --set frontend.image.repository=<registry>/frontend \
+  --set backend.image.tag=<resolved> \
+  --set frontend.image.tag=<resolved> \
+  --wait --timeout 5m
+# Cluster connection: HELM_KUBEAPISERVER=$STAGING_SERVER, HELM_KUBETOKEN=$STAGING_TOKEN
 ```
+
+**Per-app tag resolution.** Only apps that changed since the previous tag get pinned to the new tag. For unchanged apps, the deploy script reads the last successfully deployed tag out of `helm history` and re-pins that — so an unchanged app is never accidentally moved. `--wait` blocks until all pods pass their readiness probes; if they don't within the timeout, Helm exits non-zero and the job fails.
 
 ### 4.5 Stage `production` — manual gate
 
-`deploy:production` requires a manual click in the GitLab pipeline UI. Same per-app pinning logic as staging.
+`deploy:production` requires a manual click in the GitLab pipeline UI. Same Helm command and per-app pinning logic as staging, pointed at the production cluster (`PROD_SERVER` / `PROD_TOKEN`). On its first deploy to an environment with no Helm history, it falls back to the tags resolved by the staging job (passed forward via a dotenv artifact).
 
 ### 4.6 Stage `dr` — Disaster Recovery (manual gate)
 
-Mirrors the production pinning to a separate DR cluster/Application. Run after production is verified healthy.
-
-### 4.7 Stage `cleanup` — registry maintenance (manual gate)
-
-Prunes stale image tags via the GitLab Container Registry API. Keeps all semver tags and `:latest`, keeps the 10 most recently pushed non-semver tags, deletes non-semver tags older than 7 days.
+`deploy:dr` mirrors production to a DR namespace/cluster. By default it reuses the production cluster variables — change `HELM_KUBEAPISERVER` / `HELM_KUBETOKEN` in the job if DR has its own cluster. Run after production is verified healthy. Falls back to the production-resolved tags on first deploy.
 
 ---
 
-## 5. Container build and image promotion strategy
+## 5. Container build and image strategy
 
 ```mermaid
 flowchart LR
     Tag["git tag vX.Y.Z"] --> Detect["detect\ndiff prev → current tag"]
     Detect -- "BACKEND_CHANGED=1" --> BBuild["backend:docker:build"]
     Detect -- "FRONTEND_CHANGED=1" --> FBuild["frontend:docker:build"]
-    Detect -- "FILEBEAT_CHANGED=1" --> EBuild["filebeat:docker:build"]
-    BBuild --> BReg["registry/backend:vX.Y.Z + :latest"]
-    FBuild --> FReg["registry/frontend:vX.Y.Z + :latest"]
-    EBuild --> EReg["registry/filebeat:vX.Y.Z + :latest"]
+    BBuild --> BReg["registry/backend:vX.Y.Z"]
+    FBuild --> FReg["registry/frontend:vX.Y.Z"]
 ```
 
-- **`:vX.Y.Z`** — the only tag promoted to production / DR. Production is pinned explicitly via `argocd app set` and never auto-updates.
-- **`:latest`** — updated on every tag push for apps that changed. Used for staging and as a build cache source.
+- Images are tagged **only** with the release tag (`vX.Y.Z`), or the short SHA for a `FORCE_BUILD`. There is no `:latest` tag.
+- Production and DR are pinned to a specific tag via `helm --set image.tag=` and never auto-update.
+
+### Backend Docker build
+
+- Build context is `apps/backend/`.
+- Multi-stage: `builder` (pip install) → runtime (copies only installed packages). Runs as non-root `USER 1001` with GID 0 for OpenShift's `restricted` SCC.
 
 ### Frontend Docker build
 
 - Build context is `apps/frontend/` — `docker build -t zabbix-portal-frontend apps/frontend/`.
-- Multi-stage: `builder` (npm install + next build) → `runner` (Next.js standalone, `node server.js`, port 42069).
-- `apps/frontend/.env` is copied into the image (not excluded by `.dockerignore`) and loaded at server startup by `src/instrumentation.ts` via `dotenv.config()`.
-- Set `BACKEND_URL` in `apps/frontend/.env` to match the deployment target before building.
+- Multi-stage: `builder` (`npm ci` + `next build`) → `runner` (Next.js standalone, `node server.js`, port 42069). Runs as non-root `USER 1001`.
+- `apps/frontend/.env` is copied into the image and loaded at server startup by `src/instrumentation.ts` via `dotenv.config()`. Set `BACKEND_URL` before building. (In-cluster, the Route handles `/api/*` so this value is unused there.)
 
 ---
 
-## 6. ArgoCD deployment flow
+## 6. Deployment flow
+
+### Today — direct Helm from CI
 
 ```mermaid
 sequenceDiagram
     participant CI as GitLab CI
-    participant Reg as Container Registry
-    participant Argo as ArgoCD
+    participant Reg as Artifactory
+    participant Cluster as Cluster API
     participant K8s as Kubernetes
 
-    CI->>Reg: docker push :vX.Y.Z + :latest
-    CI->>Argo: argocd app set --helm-set image.tag=vX.Y.Z
-    CI->>Argo: argocd app sync
-    Argo->>K8s: kubectl apply (helm template)
+    CI->>Reg: kaniko push :vX.Y.Z
+    CI->>Cluster: helm upgrade --install (kube token)
+    Cluster->>K8s: apply rendered manifests
     K8s->>Reg: pull image:vX.Y.Z
-    K8s-->>Argo: deployment healthy
-    Argo-->>CI: app wait → success
+    K8s-->>Cluster: pods Ready
+    Cluster-->>CI: helm --wait → success
 ```
 
-- **staging**: `automated.prune: true`, `selfHeal: true` — drift is auto-corrected.
-- **production / DR**: `selfHeal: false` — drift is reported but never auto-corrected.
+- `helm upgrade --install` is the unit of deploy. `--wait` is the health gate.
+- Rollback is `helm rollback` (see `RELEASING.md`).
+
+### Planned — ArgoCD (not yet active)
+
+The `argocd/` directory contains an AppProject, ApplicationSet, and per-environment values for a future GitOps migration. These manifests are **not applied by the current pipeline**. When you switch over, `deploy:*` jobs would be replaced by `argocd app set` / `argocd app sync`, and ArgoCD would reconcile the cluster from Git. Until then, treat `argocd/` as reference scaffolding.
 
 ---
 
@@ -279,16 +300,16 @@ flowchart TD
     D --> E["git tag -a v1.4.0 -m 'Release 1.4.0'\ngit push origin v1.4.0"]
     E --> F["detect: FRONTEND_CHANGED=1\nBACKEND_CHANGED=0"]
     F --> G["lint: frontend:lint + frontend:typecheck"]
-    G --> H["build: frontend:docker:build\npush :v1.4.0 + :latest"]
-    H --> I["staging: argocd sync (auto)"]
+    G --> H["build: frontend:docker:build\npush :v1.4.0"]
+    H --> I["staging: helm upgrade (auto)"]
     I --> J["QA: validate staging"]
-    J --> K["▶ production: argocd set + sync (manual)"]
-    K --> L["▶ dr: argocd sync DR cluster (manual)"]
-    L --> M["▶ cleanup: prune old image tags (manual)"]
+    J --> K["▶ production: helm upgrade (manual)"]
+    K --> L["▶ dr: helm upgrade on DR (manual)"]
 ```
 
 Key invariants:
 
 - **Only changed apps rebuild.** If only `apps/frontend/` changed, backend jobs are skipped entirely.
-- **Production never auto-updates.** Image promotion is always an explicit `argocd app set` from CI.
-- **Rollback is always available.** Re-run `argocd app set` with a previous tag. See `RELEASING.md` for exact commands.
+- **Unchanged apps keep their deployed tag.** The deploy script reads it back from `helm history`.
+- **Production never auto-updates.** Each promotion is an explicit manual gate.
+- **Rollback is always available.** `helm rollback` to a previous revision. See `RELEASING.md`.

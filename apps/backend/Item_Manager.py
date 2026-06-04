@@ -1,11 +1,14 @@
 from Zabbix_Base import Zabbix_Base
 
+
 class Item_Manager(Zabbix_Base):
     def __init__(self):
         super().__init__()
         print("Item Manager ready.")
 
-    def add_item(self, hostname, item_name, item_key, value_type=3, team_name: str = ""):
+    def add_item(
+        self, hostname, item_name, item_key, value_type=3, team_name: str = ""
+    ):
         """
         Adds a new monitoring item to an existing host.
         value_type: 0=float, 1=string, 2=log, 3=integer, 4=text
@@ -18,21 +21,20 @@ class Item_Manager(Zabbix_Base):
         try:
             # 1. Resolve host ID
             host_data = self.zapi.host.get(
-                filter={"host": [hostname]},
-                output=["hostid"]
+                filter={"host": [hostname]}, output=["hostid"]
             )
             if not host_data:
                 print(f"⚠️ Host '{hostname}' not found.")
                 return None
 
-            host_id = host_data[0]['hostid']
+            host_id = host_data[0]["hostid"]
 
             # 2. Resolve interface ID
             interfaces = self.zapi.hostinterface.get(hostids=host_id)
             if not interfaces:
                 print(f"⚠️ No interfaces found for host '{hostname}'.")
                 return None
-            interface_id = interfaces[0]['interfaceid']
+            interface_id = interfaces[0]["interfaceid"]
 
             # 3. Create the item, tagging with team label when available (Zabbix 5.4+)
             tags = [{"tag": "team", "value": team_name}] if team_name else []
@@ -41,20 +43,24 @@ class Item_Manager(Zabbix_Base):
                 key_=item_key,
                 hostid=host_id,
                 interfaceid=interface_id,
-                type=0,              # Zabbix Agent (Passive)
+                type=0,  # Zabbix Agent (Passive)
                 value_type=value_type,
                 delay="1m",
                 tags=tags,
             )
-            item_id = result['itemids'][0]
-            print(f"✅ Item '{item_name}' (key: {item_key}) added to '{hostname}' (ID: {item_id})")
+            item_id = result["itemids"][0]
+            print(
+                f"✅ Item '{item_name}' (key: {item_key}) added to '{hostname}' (ID: {item_id})"
+            )
             return item_id
 
         except Exception as e:
             print(f"❌ Item Creation Failed: {repr(e)}")
             return None
 
-    def add_trigger(self, hostname, item_key, trigger_name, threshold, operator=">", priority=3):
+    def add_trigger(
+        self, hostname, item_key, trigger_name, threshold, operator=">", priority=3
+    ):
         """
         Adds a trigger for a host item.
         Example expression: {myhost:system.cpu.load.last()}>5
@@ -72,8 +78,7 @@ class Item_Manager(Zabbix_Base):
         try:
             # Verify the host exists.
             host_data = self.zapi.host.get(
-                filter={"host": [hostname]},
-                output=["hostid"]
+                filter={"host": [hostname]}, output=["hostid"]
             )
             if not host_data:
                 print(f"⚠️ Host '{hostname}' not found.")
@@ -83,7 +88,7 @@ class Item_Manager(Zabbix_Base):
             item_data = self.zapi.item.get(
                 hostids=host_data[0]["hostid"],
                 filter={"key_": [item_key]},
-                output=["itemid", "name", "key_"]
+                output=["itemid", "name", "key_"],
             )
             if not item_data:
                 print(f"⚠️ Item key '{item_key}' was not found on host '{hostname}'.")
@@ -91,32 +96,36 @@ class Item_Manager(Zabbix_Base):
 
             expression = f"{{{hostname}:{item_key}.last()}}{operator}{threshold}"
             result = self.zapi.trigger.create(
-                description=trigger_name,
-                expression=expression,
-                priority=int(priority)
+                description=trigger_name, expression=expression, priority=int(priority)
             )
             trigger_id = result["triggerids"][0]
-            print(f"✅ Trigger '{trigger_name}' created on '{hostname}' (ID: {trigger_id})")
+            print(
+                f"✅ Trigger '{trigger_name}' created on '{hostname}' (ID: {trigger_id})"
+            )
             return trigger_id
 
         except Exception as e:
             print(f"❌ Trigger Creation Failed: {repr(e)}")
             return None
 
-    def list_items(self, hostname: str) -> list[dict]:
-        """List all non-inherited items on a host."""
+    def list_items(self, hostname: str, include_inherited: bool = False) -> list[dict]:
+        """List items on a host. include_inherited=True returns template items too."""
         if not self.zapi:
             return []
         try:
-            host_data = self.zapi.host.get(filter={"host": [hostname]}, output=["hostid"])
+            host_data = self.zapi.host.get(
+                filter={"host": [hostname]}, output=["hostid"]
+            )
             if not host_data:
                 return []
-            items = self.zapi.item.get(
+            kwargs: dict = dict(
                 hostids=host_data[0]["hostid"],
                 output=["itemid", "name", "key_", "value_type", "delay"],
                 selectTags=["tag", "value"],
-                inherited=False,
             )
+            if not include_inherited:
+                kwargs["inherited"] = False
+            items = self.zapi.item.get(**kwargs)
             return items
         except Exception as e:
             print(f"❌ list_items failed: {repr(e)}")
@@ -139,7 +148,9 @@ class Item_Manager(Zabbix_Base):
         if not self.zapi:
             return []
         try:
-            host_data = self.zapi.host.get(filter={"host": [hostname]}, output=["hostid"])
+            host_data = self.zapi.host.get(
+                filter={"host": [hostname]}, output=["hostid"]
+            )
             if not host_data:
                 return []
             triggers = self.zapi.trigger.get(

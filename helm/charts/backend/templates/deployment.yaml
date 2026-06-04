@@ -43,8 +43,13 @@ spec:
               containerPort: 6769
               protocol: TCP
           envFrom:
+            {{- if .Values.existingConfigMap }}
+            - configMapRef:
+                name: {{ .Values.existingConfigMap }}
+            {{- else }}
             - configMapRef:
                 name: {{ include "backend.fullname" . }}-config
+            {{- end }}
             {{- if .Values.existingSecret }}
             - secretRef:
                 name: {{ .Values.existingSecret }}

@@ -1,8 +1,10 @@
+import json
 import os
 from Database import get_conn
 
 
 # ── Teams ─────────────────────────────────────────────────────────────────────
+
 
 def create_team(name: str, description: str = "") -> dict | None:
     conn = get_conn()
@@ -53,6 +55,7 @@ def delete_team(team_id: int) -> bool:
 
 
 # ── Users ─────────────────────────────────────────────────────────────────────
+
 
 def create_user(
     username: str,
@@ -135,6 +138,7 @@ def delete_user(user_id: int) -> bool:
 
 # ── Host assignments ──────────────────────────────────────────────────────────
 
+
 def assign_host(team_id: int, hostname: str) -> bool:
     conn = get_conn()
     try:
@@ -172,6 +176,7 @@ def unassign_host(hostname: str) -> bool:
 
 
 # ── Overview ──────────────────────────────────────────────────────────────────
+
 
 def get_overview(team_id: int | None = None) -> list[dict]:
     """Returns teams with members and assigned hostnames. Pass team_id to filter to one team."""
@@ -280,11 +285,13 @@ def update_user_profile(user_id: int, roles: list[str], team_id: int | None) -> 
         conn.close()
 
 
-def get_team_hostnames(team_id: int) -> set:
+def get_team_hostnames(team_id: int) -> set[str]:
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT hostname FROM host_assignments WHERE team_id = %s", (team_id,))
+            cur.execute(
+                "SELECT hostname FROM host_assignments WHERE team_id = %s", (team_id,)
+            )
             return {row["hostname"] for row in cur.fetchall()}
     except Exception as exc:
         print(f"get_team_hostnames failed: {repr(exc)}")
@@ -309,10 +316,20 @@ def get_team_name(team_id: int) -> str | None:
 
 # ── Seed default root on first boot ─────────────────────────────────────
 
+
 def seed_root():
+    import logging
     from Auth import hash_password
+
+    _log = logging.getLogger(__name__)
     username = os.getenv("ADMIN_USERNAME", "Admin")
-    password = os.getenv("ADMIN_PASSWORD", "zabbix")
+    password = os.getenv("ADMIN_PASSWORD")
+    if not password:
+        password = "admin"
+        _log.warning(
+            "ADMIN_PASSWORD env var is not set — seeding root with default password 'admin'. "
+            "Change it immediately after first login."
+        )
     conn = get_conn()
     try:
         with conn.cursor() as cur:
@@ -327,10 +344,57 @@ def seed_root():
                 )
                 # Advance the sequence so the next user gets ID 2
                 cur.execute("SELECT setval('team_users_id_seq', 1, true)")
-                print(f"Seeded default root user: '{username}' (id=1) — change the password after first login.")
+                print(
+                    f"Seeded default root user: '{username}' (id=1) — change the password after first login."
+                )
         conn.commit()
     except Exception as exc:
         conn.rollback()
         print(f"seed_root failed: {repr(exc)}")
+    finally:
+        conn.close()
+
+
+# ── Dashboard layouts ──────────────────────────────────────────────────────────
+
+
+def get_dashboard_layout(
+    owner_type: str, owner_id: int, page: str = "dashboard"
+) -> list:
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT layout FROM dashboard_layouts WHERE owner_type=%s AND owner_id=%s AND page=%s",
+                (owner_type, owner_id, page),
+            )
+            row = cur.fetchone()
+            return row["layout"] if row else []
+    except Exception as exc:
+        print(f"get_dashboard_layout failed: {repr(exc)}")
+        return []
+    finally:
+        conn.close()
+
+
+def save_dashboard_layout(
+    owner_type: str, owner_id: int, widgets: list, page: str = "dashboard"
+) -> bool:
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO dashboard_layouts (owner_type, owner_id, page, layout, updated_at)
+                   VALUES (%s, %s, %s, %s::jsonb, NOW())
+                   ON CONFLICT (owner_type, owner_id, page) DO UPDATE
+                   SET layout = EXCLUDED.layout, updated_at = NOW()""",
+                (owner_type, owner_id, page, json.dumps(widgets)),
+            )
+        conn.commit()
+        return True
+    except Exception as exc:
+        conn.rollback()
+        print(f"save_dashboard_layout failed: {repr(exc)}")
+        return False
     finally:
         conn.close()

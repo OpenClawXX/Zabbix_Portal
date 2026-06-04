@@ -1,4 +1,5 @@
 "use client";
+import ComputerOutlinedIcon from "@mui/icons-material/ComputerOutlined";
 import DeleteOutlineOutlinedIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import {
@@ -8,17 +9,66 @@ import {
   Card,
   CardContent,
   Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Divider,
   IconButton,
   Snackbar,
   Stack,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
+import { useTheme } from "@mui/material/styles";
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useTheme } from "@mui/material/styles";
-import { type Host, api } from "../app/api";
+import { type Host, type HostInterface, api } from "../app/api";
+
+const IFACE_TYPE_LABEL: Record<string, string> = {
+  "1": "Agent",
+  "2": "SNMP",
+  "3": "IPMI",
+  "4": "JMX",
+};
+
+const AVAIL_CONFIG: Record<string, { color: string; label: string }> = {
+  "1": { color: "#22C55E", label: "Connected" },
+  "2": { color: "#EF4444", label: "Disconnected" },
+  "0": { color: "#94A3B8", label: "Unknown" },
+};
+
+const AgentCell = ({ interfaces }: { interfaces?: HostInterface[] }) => {
+  if (!interfaces || interfaces.length === 0) {
+    return <Typography variant="caption" color="text.disabled">No interface</Typography>;
+  }
+  const iface = interfaces.find((i) => i.type === "1") ?? interfaces[0];
+  const typeLabel = IFACE_TYPE_LABEL[iface.type] ?? `Type ${iface.type}`;
+  const avail = AVAIL_CONFIG[iface.available] ?? AVAIL_CONFIG["0"];
+  return (
+    <Tooltip title={`${typeLabel} · ${iface.ip}:${iface.port} · ${avail.label}`}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+        <Box
+          sx={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            bgcolor: avail.color,
+            flexShrink: 0,
+            boxShadow: `0 0 4px ${avail.color}80`,
+          }}
+        />
+        <Typography variant="body2" sx={{ fontSize: "0.8rem" }}>
+          {typeLabel}
+        </Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ fontSize: "0.72rem" }}>
+          {avail.label}
+        </Typography>
+      </Box>
+    </Tooltip>
+  );
+};
 import { useSync } from "../app/context/SyncContext";
 
 export const Hosts = () => {
@@ -42,6 +92,7 @@ export const Hosts = () => {
   });
   const [hosts, setHosts] = useState<Host[]>([]);
   const [loading, setLoading] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<Host | null>(null);
 
   const showToast = useCallback((message: string, severity: "success" | "error") => {
     setToast({ open: true, message, severity });
@@ -59,6 +110,7 @@ export const Hosts = () => {
     }
   }, [showToast]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: lastSync triggers re-fetch on sync events
   useEffect(() => {
     void reload();
   }, [reload, lastSync]);
@@ -80,6 +132,7 @@ export const Hosts = () => {
       try {
         await api.deleteHost(h.host);
         showToast(`Host '${h.host}' deleted successfully.`, "success");
+        setConfirmDelete(null);
         await reload();
       } catch (e) {
         showToast(e instanceof Error ? e.message : String(e), "error");
@@ -140,13 +193,21 @@ export const Hosts = () => {
         ),
       },
       {
+        field: "interfaces",
+        headerName: "Agent",
+        width: 200,
+        sortable: false,
+        filterable: false,
+        renderCell: (params) => <AgentCell interfaces={params.value as HostInterface[]} />,
+      },
+      {
         field: "actions",
         headerName: "",
         width: 90,
         sortable: false,
         filterable: false,
         renderCell: (params) => (
-          <IconButton aria-label="Delete" size="small" onClick={() => onDelete(params.row as Host)}>
+          <IconButton aria-label="Delete host" size="small" onClick={() => setConfirmDelete(params.row as Host)}>
             <DeleteOutlineOutlinedIcon fontSize="small" />
           </IconButton>
         ),
@@ -157,17 +218,22 @@ export const Hosts = () => {
 
   return (
     <Stack spacing={3}>
-      <Box>
-        <Typography variant="h5" sx={{ fontWeight: 800 }}>
-          Hosts
-        </Typography>
-        <Typography color="text.secondary">Create, review, and delete hosts in Zabbix.</Typography>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
+        <ComputerOutlinedIcon sx={{ fontSize: 28, color: "primary.main" }} />
+        <Box>
+          <Typography variant="h5" sx={{ fontWeight: 700 }}>
+            Hosts
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Create, review, and delete hosts in Zabbix.
+          </Typography>
+        </Box>
       </Box>
 
       <Card>
         <CardContent>
           <Stack spacing={2}>
-            <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
               Create host
             </Typography>
             <Typography color="text.secondary" variant="body2">
@@ -207,14 +273,29 @@ export const Hosts = () => {
       <Card>
         <CardContent>
           <Stack spacing={2}>
-            <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
               Bulk import hosts
             </Typography>
             <Typography color="text.secondary" variant="body2">
-              Upload a `.csv` or `.xlsx` with columns: `hostname` (or `host`), `ip` (or
-              `ip_address`), optional `template`.
+              Upload a{" "}
+              <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.85em" }}>.csv</Box>
+              {" or "}
+              <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.85em" }}>.xlsx</Box>
+              {" with columns: "}
+              <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.85em" }}>hostname</Box>
+              {" (or "}
+              <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.85em" }}>host</Box>
+              {"), "}
+              <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.85em" }}>ip</Box>
+              {" (or "}
+              <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.85em" }}>ip_address</Box>
+              {"), optional "}
+              <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.85em" }}>template</Box>
+              .
             </Typography>
             <Box
+              component="label"
+              htmlFor="bulk-upload-input"
               onDragOver={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -233,15 +314,17 @@ export const Hosts = () => {
               }}
               sx={{
                 border: "2px dashed",
-                borderColor: dragActive ? "primary.main" : "rgba(148,163,184,0.45)",
+                borderColor: dragActive ? "primary.main" : "divider",
                 borderRadius: 3,
                 p: 2.5,
-                bgcolor: dragActive ? "rgba(34,211,238,0.08)" : "rgba(15,23,42,0.24)",
+                bgcolor: dragActive ? "rgba(59,130,246,0.06)" : "action.hover",
                 transition: "all 0.2s ease",
+                cursor: "pointer",
+                display: "block",
               }}
             >
               <Typography variant="body2" color="text.secondary">
-                Drag & drop your file here, or click "Choose file".
+                Drag & drop your file here, or click to choose a file.
               </Typography>
             </Box>
             <Stack
@@ -249,9 +332,10 @@ export const Hosts = () => {
               spacing={2}
               sx={{ alignItems: { md: "center" } }}
             >
-              <Button variant="outlined" component="label">
+              <Button variant="outlined" component="label" htmlFor="bulk-upload-input">
                 Choose file
                 <input
+                  id="bulk-upload-input"
                   hidden
                   type="file"
                   accept=".csv,.xlsx"
@@ -277,7 +361,7 @@ export const Hosts = () => {
         <CardContent>
           <Stack spacing={1.5}>
             <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-              <Typography variant="subtitle1" sx={{ fontWeight: 800, flex: 1 }}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 700, flex: 1 }}>
                 Hosts inventory
               </Typography>
               <IconButton size="small" onClick={reload} aria-label="Refresh">
@@ -299,10 +383,14 @@ export const Hosts = () => {
                   border: "none",
                   "& .MuiDataGrid-columnHeaders": {
                     backgroundColor: isDark ? "rgba(11,22,40,0.6)" : "rgba(241,245,249,0.9)",
-                    borderBottom: isDark ? "1px solid rgba(255,255,255,0.07)" : "1px solid rgba(15,23,42,0.08)",
+                    borderBottom: isDark
+                      ? "1px solid rgba(255,255,255,0.07)"
+                      : "1px solid rgba(15,23,42,0.08)",
                   },
                   "& .MuiDataGrid-cell": {
-                    borderBottom: isDark ? "1px solid rgba(255,255,255,0.04)" : "1px solid rgba(15,23,42,0.06)",
+                    borderBottom: isDark
+                      ? "1px solid rgba(255,255,255,0.04)"
+                      : "1px solid rgba(15,23,42,0.06)",
                   },
                   "& .MuiDataGrid-row:hover": {
                     backgroundColor: isDark ? "rgba(59,130,246,0.06)" : "rgba(59,130,246,0.04)",
@@ -313,6 +401,26 @@ export const Hosts = () => {
           </Stack>
         </CardContent>
       </Card>
+      <Dialog open={!!confirmDelete} onClose={() => setConfirmDelete(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700 }}>Delete host?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">
+            This will permanently remove <strong>{confirmDelete?.host}</strong> from Zabbix. This
+            action cannot be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmDelete(null)}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="error"
+            onClick={() => confirmDelete && onDelete(confirmDelete)}
+          >
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       <Snackbar
         open={toast.open}
         autoHideDuration={3000}

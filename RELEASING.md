@@ -3,6 +3,8 @@
 How to ship code changes — from a single bug-fix commit to a tagged production release.
 
 > **The CI/CD pipeline runs ONLY on git tag pushes.** Branch pushes and merge requests do nothing in CI. The tag *is* the release. Until you tag, nothing is built, nothing is deployed.
+>
+> **Deployment runs via direct `helm upgrade --install` from CI.** ArgoCD manifests in `argocd/` are the planned future path but are not yet wired into the pipeline — every command below uses Helm.
 
 If you only want to understand what the pipeline does, read [`WORKFLOW.md`](./WORKFLOW.md). This document is a runbook — what commands to run, in what order, when something needs to ship.
 
@@ -13,7 +15,7 @@ If you only want to understand what the pipeline does, read [`WORKFLOW.md`](./WO
 | I want to…                              | Do this                                                  |
 | --------------------------------------- | -------------------------------------------------------- |
 | Ship a release                          | Push a git tag — manually or via the workspace tool.     |
-| Roll production back                    | `argocd app set` to a previous tag (see §6).             |
+| Roll production back                    | `helm rollback` to a previous revision (see §6).         |
 | Hotfix production                       | Branch from the production tag → tag a new patch.        |
 | Bump only the Helm chart                | Tag a release — only `helm/` changed since the last tag. |
 | Validate locally before tagging         | `npm run lint && npm run typecheck` (frontend) + `ruff check . && mypy .` (backend) + `helm lint helm/charts/*`. |
@@ -26,12 +28,15 @@ Before your first release ensure:
 
 - You have **Maintainer** access on the GitLab project.
 - These CI variables are configured (Settings → CI/CD → Variables, masked + protected):
-  - `CI_REGISTRY_USER` / `CI_REGISTRY_PASSWORD` (auto-provided by GitLab)
-  - `ARGOCD_SERVER` (e.g. `argocd.example.com`)
-  - `ARGOCD_AUTH_TOKEN` (token for an ArgoCD service account with `applications, sync` rights on project `zabbix-portal`)
-- The ArgoCD AppProject and ApplicationSet are applied (`./argocd/bootstrap.sh`).
+  - `K8S_NAMESPACE` — target namespace (pre-created in OpenShift)
+  - `STAGING_SERVER` / `STAGING_TOKEN` — staging cluster API URL + service-account token
+  - `PROD_SERVER` / `PROD_TOKEN` — production cluster API URL + token (DR reuses these by default)
+  - `STAGING_URL` / `PRODUCTION_URL` / `DR_URL` — environment URLs shown in the GitLab environment tab
 - The container registry is reachable from the GitLab runners and from each cluster.
+- The Artifactory registry path is set where the pipeline pushes/pulls images (search `<your-artifactory-registry>` — see [`PRIVATE_NETWORK.md`](./PRIVATE_NETWORK.md)).
 - See [`.cienv-example`](./.cienv-example) for the full list of CI variables.
+
+`validate:variables` in the `.pre` stage hard-fails the pipeline if any required cluster variable is missing, so a misconfiguration is caught before any build runs.
 
 ---
 
@@ -46,7 +51,6 @@ flowchart LR
     E --> F["validate staging"]
     F --> G["▶ production (manual)"]
     G --> H["▶ dr (manual, optional)"]
-    H --> I["▶ cleanup (manual, periodic)"]
 ```
 
 ### 2.1 Prepare your changes
@@ -82,7 +86,6 @@ git checkout main && git pull
 # Annotated tag with a release note
 git tag -a v1.4.0 -m "Release 1.4.0 — <one-line summary>"
 
-
 # Push the tag — this is what fires CI
 git push origin v1.4.0
 ```
@@ -98,44 +101,39 @@ Whatever tool you use, the moment a tag lands on the remote, CI starts.
 
 ### 2.3 What CI does on the tag
 
-1. **`detect`** (`.pre` stage) — compares the new tag against the previous ancestor tag and emits per-app `BACKEND_CHANGED` / `FRONTEND_CHANGED` / `FILEBEAT_CHANGED` / `HELM_CHANGED` flags.
-2. **`lint` stage** — ruff, mypy, Biome, helm lint run only for apps that changed. Filebeat has no lint job (config-only app).
-3. **`build` stage** — Docker images for changed apps (backend, frontend, filebeat) are pushed with two tags: `:<git-tag>` and `:latest`.
-4. **`staging` stage** — `deploy:staging` automatically pins all changed apps and syncs ArgoCD.
+1. **`detect`** (`.pre` stage) — compares the new tag against the previous ancestor tag and emits per-app `BACKEND_CHANGED` / `FRONTEND_CHANGED` / `HELM_CHANGED` flags. `validate:variables` checks required CI variables are set.
+2. **`lint` stage** — ruff, mypy, Biome, tsc, helm lint/template run only for apps that changed.
+3. **`build` stage** — Kaniko builds Docker images for changed apps and pushes them tagged `:<git-tag>`.
+4. **`staging` stage** — `deploy:staging` runs `helm upgrade --install` against the staging cluster, pinning changed apps to the new tag and keeping unchanged apps on their last-deployed tag.
 5. **`production` stage** — `deploy:production` is a manual gate. Click ▶ when staging looks good.
-6. **`dr` stage** — `deploy:dr` is a manual gate to mirror production to the DR cluster. Run after production is verified healthy.
-7. **`cleanup` stage** — `cleanup:registry` is a manual gate to prune old image tags from the container registry.
+6. **`dr` stage** — `deploy:dr` is a manual gate to mirror production to the DR namespace/cluster.
 
 ### 2.4 Validate on staging
 
 Spot-check the change in the staging UI. Watch the deployment:
 
 ```bash
-argocd app get  zabbix-portal-staging
-argocd app history zabbix-portal-staging
-kubectl -n zabbix-portal-staging rollout status deploy/zabbix-portal-staging-zabbix-portal-frontend
+helm status     "$PROJECT_NAME" -n "$STAGING_NAMESPACE"
+helm history    "$PROJECT_NAME" -n "$STAGING_NAMESPACE"
+kubectl -n "$STAGING_NAMESPACE" rollout status deploy/"$PROJECT_NAME"-zabbix-portal-frontend
 ```
 
 If something is wrong: see §6 to roll back, then fix and re-tag.
 
 ### 2.5 Promote to production
 
-Open the pipeline in GitLab → click ▶ on `deploy:production`.
-
-The job runs:
+Open the pipeline in GitLab → click ▶ on `deploy:production`. The job runs the same `helm upgrade --install` as staging, against the production cluster:
 
 ```bash
-# Only apps that changed since the previous tag get a new image tag here.
-# Unchanged apps stay on whatever tag they were last pinned to.
-argocd app set zabbix-portal-production \
-  [--helm-set zabbix-portal-backend.image.tag=v1.4.0]   # only if backend changed
-  [--helm-set zabbix-portal-frontend.image.tag=v1.4.0]  # only if frontend changed
-  [--helm-set zabbix-portal-filebeat.image.tag=v1.4.0]  # only if filebeat changed
-argocd app sync zabbix-portal-production
-argocd app wait zabbix-portal-production --health --sync --timeout 300
+helm upgrade --install "$PROJECT_NAME" "helm/charts/$PROJECT_NAME/" \
+  --namespace "$K8S_NAMESPACE" \
+  -f values.yaml -f values-production.yaml \
+  --set backend.image.tag=<resolved> \
+  --set frontend.image.tag=<resolved> \
+  --wait --timeout 5m
 ```
 
-If `argocd app wait` times out or reports `Degraded`, the job fails — production stays on the old tag.
+Only apps that changed since the previous tag are pinned to the new tag; unchanged apps keep whatever tag was last deployed (read back from `helm history`). If `--wait` times out or a pod fails its readiness probe, the job fails and production stays on the old release.
 
 ---
 
@@ -160,7 +158,6 @@ When you cut release `v1.4.0`, also update `appVersion: "1.4.0"` in:
 
 - `helm/charts/backend/Chart.yaml`
 - `helm/charts/frontend/Chart.yaml`
-- `helm/charts/filebeat/Chart.yaml`
 - `helm/charts/zabbix-portal/Chart.yaml`
 
 …and bump each `version:` field by at least a patch level. Commit those changes to `main` **before** creating the tag, so the tag captures the matching chart version.
@@ -198,49 +195,49 @@ The tag push is what fires CI. Detection diffs `v1.4.0..v1.4.1` and only the app
 
 Per-app releases are automatic — no extra ceremony required. The detect job diffs the new tag against the previous tag and only the apps with actual code changes get rebuilt and re-pinned.
 
-| Scenario                                              | Backend | Frontend | Filebeat |
-| ----------------------------------------------------- | ------- | -------- | -------- |
-| Tag with backend-only changes since last tag          | rebuilt | unchanged | unchanged |
-| Tag with frontend-only changes                        | unchanged | rebuilt | unchanged |
-| Tag with filebeat-only changes                        | unchanged | unchanged | rebuilt |
-| Tag with changes to all three                         | rebuilt | rebuilt | rebuilt |
-| Tag with only `helm/` changes (no app code)           | unchanged | unchanged | unchanged |
-| First-ever tag (no previous tag to diff against)      | rebuilt | rebuilt | rebuilt |
+| Scenario                                              | Backend | Frontend |
+| ----------------------------------------------------- | ------- | -------- |
+| Tag with backend-only changes since last tag          | rebuilt | unchanged |
+| Tag with frontend-only changes                        | unchanged | rebuilt |
+| Tag with changes to both                              | rebuilt | rebuilt |
+| Tag with only `helm/` changes (no app code)           | unchanged | unchanged |
+| First-ever tag (no previous tag to diff against)      | rebuilt | rebuilt |
 
-In the production deploy job, the same diff drives `argocd app set`: only changed apps get pinned to the new tag. The other app stays on whatever tag it was previously pinned to.
+In each deploy job, the same diff drives `helm --set image.tag`: only changed apps are pinned to the new tag. Unchanged apps keep the tag read back from `helm history`.
 
 ---
 
 ## 6. Rollback procedures
 
-There is no automatic rollback. Production stays on whatever was last pinned, even if `main` advances.
+There is no automatic rollback. Production stays on whatever was last deployed, even if `main` advances.
 
-### 6.1 Roll production back to a previous tag
+### 6.1 Roll back to the previous Helm revision
 
-```bash
-argocd app set zabbix-portal-production \
-  --helm-set zabbix-portal-backend.image.tag=v1.3.0 \
-  --helm-set zabbix-portal-frontend.image.tag=v1.3.0
-argocd app sync zabbix-portal-production
-argocd app wait zabbix-portal-production --health --sync --timeout 300
-```
-
-This does not require a Git revert and is the recommended path during an incident. Open a follow-up MR afterwards to revert the offending commits in source so the next tag does not reintroduce the bad code.
-
-### 6.2 Roll back via ArgoCD history
-
-Each successful sync is a revision in ArgoCD's history:
+Each successful `helm upgrade` is a revision. Roll back in one command:
 
 ```bash
-argocd app history  zabbix-portal-production
-argocd app rollback zabbix-portal-production <REVISION_NUMBER>
+helm history  "$PROJECT_NAME" -n "$K8S_NAMESPACE"
+helm rollback "$PROJECT_NAME" <REVISION_NUMBER> -n "$K8S_NAMESPACE" --wait --timeout 5m
 ```
 
-This restores both the chart and the values to that revision in one shot.
+This restores both the chart and the values (including the image tags) to that revision. This is the recommended path during an incident — no Git revert required. Open a follow-up MR afterwards to revert the offending commits in source so the next tag does not reintroduce the bad code.
+
+### 6.2 Roll forward to a specific known-good tag
+
+If you'd rather re-deploy an explicit older tag than step back a revision:
+
+```bash
+helm upgrade --install "$PROJECT_NAME" "helm/charts/$PROJECT_NAME/" \
+  --namespace "$K8S_NAMESPACE" \
+  -f values.yaml -f values-production.yaml \
+  --set backend.image.tag=v1.3.0 \
+  --set frontend.image.tag=v1.3.0 \
+  --wait --timeout 5m
+```
 
 ### 6.3 Roll back staging
 
-Re-run the previous tag's pipeline, or simply tag a new patch release that reverts the bad commits.
+Re-run the previous tag's pipeline, `helm rollback` staging, or tag a new patch release that reverts the bad commits.
 
 ---
 
@@ -272,6 +269,6 @@ In this repository, **only tags are releases**. There is no "auto-deploy on `mai
 - `main` is allowed to be in flux — features can land without being immediately deployed to staging or production.
 - Every deploy is intentional and traceable to a tag with a release note.
 - Per-app detection always has a clean comparison base (`previous tag → current tag`), so noise from intermediate commits never enters the deploy decision.
-- Rolling back is just `argocd app set` to a known-good tag — no need to revert commits in Git first.
+- Rolling back is just `helm rollback` to a known-good revision — no need to revert commits in Git first.
 
 If you want feature-branch previews or auto-deploys on `main`, that is a separate workflow you would add on top — not a replacement for this one.

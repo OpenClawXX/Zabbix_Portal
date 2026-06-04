@@ -18,8 +18,8 @@ import {
 } from "@mui/material";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { type Team, api } from "../app/api";
 import { useAuth } from "../app/context/AuthContext";
-import { api, type Team } from "../app/api";
 import { useSync } from "../app/context/SyncContext";
 
 type Stats = {
@@ -56,7 +56,11 @@ const StatCard = ({
       cursor: href ? "pointer" : "default",
       transition: "transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease",
       "&:hover": href
-        ? { transform: "translateY(-2px)", boxShadow: "0 12px 32px rgba(0,0,0,0.4)", borderColor: color }
+        ? {
+            transform: "translateY(-2px)",
+            boxShadow: "0 12px 32px rgba(0,0,0,0.4)",
+            borderColor: color,
+          }
         : {},
     }}
   >
@@ -89,7 +93,9 @@ const StatCard = ({
         </>
       ) : (
         <>
-          <Typography sx={{ fontSize: "2rem", fontWeight: 700, lineHeight: 1, letterSpacing: -1, color }}>
+          <Typography
+            sx={{ fontSize: "2rem", fontWeight: 700, lineHeight: 1, letterSpacing: -1, color }}
+          >
             {value}
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, fontSize: "0.78rem" }}>
@@ -149,6 +155,7 @@ export const Overview = () => {
     year: "numeric",
   });
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: lastSync triggers re-fetch on sync events
   useEffect(() => {
     const load = async () => {
       setLoading(true);
@@ -184,7 +191,8 @@ export const Overview = () => {
       {/* Header */}
       <Box sx={{ mb: 4 }}>
         <Typography variant="h4" sx={{ fontWeight: 700, letterSpacing: -0.5, mb: 0.5 }}>
-          {greeting}{user?.username ? `, ${user.username}` : ""}
+          {greeting}
+          {user?.username ? `, ${user.username}` : ""}
         </Typography>
         <Typography color="text.secondary" sx={{ fontSize: "0.875rem" }}>
           {dateStr}
@@ -229,7 +237,7 @@ export const Overview = () => {
             value: stats?.assignedServers ?? 0,
             sub: stats ? `${stats.totalHosts - stats.assignedServers} unassigned` : undefined,
             color: "#10B981",
-            href: "/teams",
+            href: "/hosts",
           },
         ].map((card) => (
           <Grid item xs={12} sm={6} md={4} lg key={card.label}>
@@ -246,7 +254,11 @@ export const Overview = () => {
               <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 0.5 }}>
                 Quick Actions
               </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5, fontSize: "0.8rem" }}>
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ mb: 2.5, fontSize: "0.8rem" }}
+              >
                 Jump to common tasks
               </Typography>
               <Divider sx={{ mb: 2.5 }} />
@@ -298,13 +310,21 @@ export const Overview = () => {
               <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 0.5 }}>
                 System Status
               </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5, fontSize: "0.8rem" }}>
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ mb: 2.5, fontSize: "0.8rem" }}
+              >
                 Live infrastructure health
               </Typography>
               <Divider sx={{ mb: 2.5 }} />
               <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <StatusRow label="Backend API" ok={health?.ok ?? false} loading={loading} />
-                <StatusRow label="Zabbix Connection" ok={health?.zabbix ?? false} loading={loading} />
+                <StatusRow
+                  label="Zabbix Connection"
+                  ok={health?.zabbix ?? false}
+                  loading={loading}
+                />
                 <StatusRow label="Database" ok={health?.ok ?? false} loading={loading} />
               </Box>
               {!loading && health && (
@@ -313,9 +333,8 @@ export const Overview = () => {
                     mt: 3,
                     p: 1.5,
                     borderRadius: 2,
-                    backgroundColor: health.ok && health.zabbix
-                      ? "rgba(34,197,94,0.08)"
-                      : "rgba(239,68,68,0.08)",
+                    backgroundColor:
+                      health.ok && health.zabbix ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
                     border: `1px solid ${health.ok && health.zabbix ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"}`,
                   }}
                 >
@@ -330,8 +349,8 @@ export const Overview = () => {
                     {health.ok && health.zabbix
                       ? "All systems operational"
                       : !health.ok
-                      ? "Backend unreachable — API calls will fail"
-                      : "Zabbix disconnected — check credentials"}
+                        ? "Backend unreachable — API calls will fail"
+                        : "Zabbix disconnected — check credentials"}
                   </Typography>
                 </Box>
               )}

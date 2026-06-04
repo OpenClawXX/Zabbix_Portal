@@ -16,10 +16,13 @@ This guide covers building and running the backend and frontend as standalone Do
 Browser
   └── frontend (Next.js :42069)
         └── /api/* → route handler → backend (FastAPI :6769)
-                                          └── Zabbix JSON-RPC
+                                          ├── Zabbix JSON-RPC
+                                          └── PostgreSQL (shared/external)
 ```
 
 The Next.js route handler at `src/app/api/[...path]/route.ts` proxies all `/api/*` requests to the backend. The backend address is controlled by `BACKEND_URL` in `apps/frontend/.env`, which is baked into the frontend image at build time.
+
+PostgreSQL is **not** part of this stack — it is a shared/external database. The backend reaches it via `DATABASE_URL` in `apps/backend/.env`.
 
 ---
 
@@ -27,16 +30,23 @@ The Next.js route handler at `src/app/api/[...path]/route.ts` proxies all `/api/
 
 ### 1. Configure the backend environment file
 
-Create `apps/backend/.env` (required — the backend will not connect to Zabbix without it):
+Create `apps/backend/.env` (required — the backend will not start without it):
 
 ```
 ZABBIX_URL=http://your-zabbix-server
 ZABBIX_USER=Admin
 ZABBIX_PASS=zabbix
+
+# Shared/external PostgreSQL — point this at your DB host
+DATABASE_URL=postgresql://postgres:postgres@<db-host>:5432/zabbix_portal
+
+# Long random string — signs JWT tokens
+SECRET_KEY=change-me-in-production
+
 BACKEND_URL=http://backend:6769
 ```
 
-`BACKEND_URL` is used by the frontend, not the backend process itself. Set it to `http://backend:6769` when running both containers on the same Docker network (the recommended setup below).
+`DATABASE_URL` must reach your shared PostgreSQL from inside the container — use the DB's reachable host/IP, not `localhost` (which would resolve to the container itself). `BACKEND_URL` is used by the frontend, not the backend process itself; set it to `http://backend:6769` when running both containers on the same Docker network (the recommended setup below).
 
 ### 2. Configure the frontend environment file
 
@@ -133,7 +143,7 @@ docker exec -it frontend sh
 
 ## Health check
 
-The frontend polls `/api/health` every 10 seconds. The sidebar shows the result as a chip on mobile. A red banner appears across the top of every page if the backend is unreachable; a yellow banner appears if the backend is up but cannot connect to Zabbix.
+The frontend polls `/api/health` every 15 seconds. The sidebar shows two live status dots — one for the Backend API and one for Zabbix (green = up, red = down). On mobile, the top bar shows a single "Healthy" / "Degraded" chip.
 
 The backend exposes its own health endpoint directly:
 

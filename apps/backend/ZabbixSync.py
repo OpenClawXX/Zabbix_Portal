@@ -43,11 +43,11 @@ _SYNC_INTERVAL = int(os.getenv("ZABBIX_SYNC_INTERVAL", "60"))
 #   No separate sync is needed for items or triggers.
 
 _ROLE_TO_TYPE: dict[str, int] = {
-    "root":      3,  # Zabbix Super admin
+    "root": 3,  # Zabbix Super admin
     "team_lead": 2,  # Zabbix Admin
-    "operator":  1,  # Zabbix User
-    "auditor":   1,
-    "member":    1,
+    "operator": 1,  # Zabbix User
+    "auditor": 1,
+    "member": 1,
 }
 
 _TYPE_TO_ROLES: dict[int, list[str]] = {
@@ -59,8 +59,8 @@ _TYPE_TO_ROLES: dict[int, list[str]] = {
 # Default Zabbix groups that map directly to portal roles (not imported as teams)
 _GROUP_ROLE_MAP: dict[str, str] = {
     "Zabbix administrators": "root",
-    "Guests":                "member",
-    "Internal":              "member",
+    "Guests": "member",
+    "Internal": "member",
 }
 
 # Groups whose members cannot access the portal frontend — skip entirely
@@ -71,7 +71,7 @@ _DEFAULT_GROUP = "Zabbix Portal Users"
 
 # Zabbix host group permission levels
 _PERM_READ_WRITE = 3
-_PERM_READ       = 2
+_PERM_READ = 2
 
 
 class ZabbixSync(Zabbix_Base):
@@ -92,10 +92,10 @@ class ZabbixSync(Zabbix_Base):
         #   usergroup.update: 'rights'         → 'hostgroup_rights'
         #   host.get select:  'selectGroups'   → 'selectHostGroups'
         #   host object key:  'groups'         → 'hostgroups'
-        self._rights_field     = "hostgroup_rights"
-        self._select_hg_param  = "selectHostGroups"
-        self._host_hg_key      = "hostgroups"
-        self._on_sync          = None  # optional callback fired after every full_sync()
+        self._rights_field = "hostgroup_rights"
+        self._select_hg_param = "selectHostGroups"
+        self._host_hg_key = "hostgroups"
+        self._on_sync = None  # optional callback fired after every full_sync()
 
         if self.zapi:
             try:
@@ -103,11 +103,13 @@ class ZabbixSync(Zabbix_Base):
                 self._zabbix_major = int(parts[0])
                 self._zabbix_minor = int(parts[1]) if len(parts) > 1 else 0
                 self._ufield = "username" if self._zabbix_major >= 6 else "alias"
-                old_api = self._zabbix_major < 6 or (self._zabbix_major == 6 and self._zabbix_minor < 2)
+                old_api = self._zabbix_major < 6 or (
+                    self._zabbix_major == 6 and self._zabbix_minor < 2
+                )
                 if old_api:
-                    self._rights_field    = "rights"
+                    self._rights_field = "rights"
                     self._select_hg_param = "selectGroups"
-                    self._host_hg_key     = "groups"
+                    self._host_hg_key = "groups"
             except Exception:
                 pass
             if self._zabbix_major >= 6:
@@ -156,7 +158,9 @@ class ZabbixSync(Zabbix_Base):
     def _get_or_create_usergroup(self, name: str) -> str | None:
         """Return usrgrpid for a Zabbix user group, creating it if absent."""
         try:
-            existing = self.zapi.usergroup.get(filter={"name": name}, output=["usrgrpid"])
+            existing = self.zapi.usergroup.get(
+                filter={"name": name}, output=["usrgrpid"]
+            )
             if existing:
                 return existing[0]["usrgrpid"]
             result = self.zapi.usergroup.create(name=name, gui_access=0, users_status=0)
@@ -168,7 +172,9 @@ class ZabbixSync(Zabbix_Base):
     def _get_or_create_hostgroup(self, name: str) -> str | None:
         """Return groupid for a Zabbix host group, creating it if absent."""
         try:
-            existing = self.zapi.hostgroup.get(filter={"name": name}, output=["groupid"])
+            existing = self.zapi.hostgroup.get(
+                filter={"name": name}, output=["groupid"]
+            )
             if existing:
                 return existing[0]["groupid"]
             result = self.zapi.hostgroup.create(name=name)
@@ -177,7 +183,9 @@ class ZabbixSync(Zabbix_Base):
             print(f"ZabbixSync._get_or_create_hostgroup('{name}') failed: {repr(exc)}")
             return None
 
-    def _set_usergroup_permission(self, usrgrpid: str, host_groupid: str, perm: int = _PERM_READ_WRITE) -> None:
+    def _set_usergroup_permission(
+        self, usrgrpid: str, host_groupid: str, perm: int = _PERM_READ_WRITE
+    ) -> None:
         """Give a user group read-write access to a host group.
 
         Sets the rights directly. permission must be an integer:
@@ -188,7 +196,9 @@ class ZabbixSync(Zabbix_Base):
                 usrgrpid=usrgrpid,
                 **{self._rights_field: [{"permission": perm, "id": host_groupid}]},
             )
-            print(f"ZabbixSync: set permission={perm} for usrgrp={usrgrpid} on hostgroup={host_groupid}.")
+            print(
+                f"ZabbixSync: set permission={perm} for usrgrp={usrgrpid} on hostgroup={host_groupid}."
+            )
         except Exception as exc:
             print(f"ZabbixSync._set_usergroup_permission FAILED: {repr(exc)}")
 
@@ -197,13 +207,19 @@ class ZabbixSync(Zabbix_Base):
 
     # ── Portal → Zabbix: users ────────────────────────────────────────────────
 
-    def push_user(self, username: str, password: str, roles: list[str], team_name: str | None) -> None:
+    def push_user(
+        self, username: str, password: str, roles: list[str], team_name: str | None
+    ) -> None:
         """Create or update a Zabbix user to match the portal user."""
         if not self.zapi:
             return
-        usrgrpid = self._get_or_create_usergroup(team_name if team_name else _DEFAULT_GROUP)
+        usrgrpid = self._get_or_create_usergroup(
+            team_name if team_name else _DEFAULT_GROUP
+        )
         if not usrgrpid:
-            print(f"ZabbixSync.push_user('{username}'): could not resolve user group — skipping.")
+            print(
+                f"ZabbixSync.push_user('{username}'): could not resolve user group — skipping."
+            )
             return
         usrgrps = [{"usrgrpid": usrgrpid}]
         user_type = self._user_type(roles)
@@ -271,24 +287,30 @@ class ZabbixSync(Zabbix_Base):
         """
         if not self.zapi:
             return
-        usrgrpid    = self._get_or_create_usergroup(team_name)
-        host_grpid  = self._get_or_create_hostgroup(team_name)
+        usrgrpid = self._get_or_create_usergroup(team_name)
+        host_grpid = self._get_or_create_hostgroup(team_name)
         if usrgrpid and host_grpid:
             self._set_usergroup_permission(usrgrpid, host_grpid)
-            print(f"ZabbixSync: team '{team_name}' → user group + host group + permissions set.")
+            print(
+                f"ZabbixSync: team '{team_name}' → user group + host group + permissions set."
+            )
 
     def delete_team(self, team_name: str) -> None:
         """Delete the Zabbix user group and host group that match a portal team."""
         if not self.zapi:
             return
         try:
-            ug = self.zapi.usergroup.get(filter={"name": team_name}, output=["usrgrpid"])
+            ug = self.zapi.usergroup.get(
+                filter={"name": team_name}, output=["usrgrpid"]
+            )
             if ug:
                 self.zapi.usergroup.delete(ug[0]["usrgrpid"])
             hg = self.zapi.hostgroup.get(filter={"name": team_name}, output=["groupid"])
             if hg:
                 self.zapi.hostgroup.delete(hg[0]["groupid"])
-            print(f"ZabbixSync: deleted Zabbix user group and host group for '{team_name}'.")
+            print(
+                f"ZabbixSync: deleted Zabbix user group and host group for '{team_name}'."
+            )
         except Exception as exc:
             print(f"ZabbixSync.delete_team('{team_name}') failed: {repr(exc)}")
 
@@ -305,23 +327,33 @@ class ZabbixSync(Zabbix_Base):
                 **{self._select_hg_param: ["groupid"]},
             )
             if not hosts:
-                print(f"ZabbixSync.push_host_to_team: host '{hostname}' not found in Zabbix.")
+                print(
+                    f"ZabbixSync.push_host_to_team: host '{hostname}' not found in Zabbix."
+                )
                 return
             host = hosts[0]
             host_grpid = self._get_or_create_hostgroup(team_name)
             if not host_grpid:
                 return
-            current_groups = [{"groupid": g["groupid"]} for g in host.get(self._host_hg_key, [])]
+            current_groups = [
+                {"groupid": g["groupid"]} for g in host.get(self._host_hg_key, [])
+            ]
             if not any(g["groupid"] == host_grpid for g in current_groups):
                 self.zapi.host.update(
                     hostid=host["hostid"],
                     groups=current_groups + [{"groupid": host_grpid}],
                 )
-                print(f"ZabbixSync: host '{hostname}' added to Zabbix host group '{team_name}'.")
+                print(
+                    f"ZabbixSync: host '{hostname}' added to Zabbix host group '{team_name}'."
+                )
             else:
-                print(f"ZabbixSync: host '{hostname}' already in host group '{team_name}'.")
+                print(
+                    f"ZabbixSync: host '{hostname}' already in host group '{team_name}'."
+                )
         except Exception as exc:
-            print(f"ZabbixSync.push_host_to_team('{hostname}', '{team_name}') FAILED: {repr(exc)}")
+            print(
+                f"ZabbixSync.push_host_to_team('{hostname}', '{team_name}') FAILED: {repr(exc)}"
+            )
 
     def remove_host_from_team(self, hostname: str, team_name: str) -> None:
         """Remove a Zabbix host from the team's host group."""
@@ -340,15 +372,25 @@ class ZabbixSync(Zabbix_Base):
             if not hosts:
                 return
             host = hosts[0]
-            remaining = [{"groupid": g["groupid"]} for g in host.get(self._host_hg_key, []) if g["groupid"] != host_grpid]
+            remaining = [
+                {"groupid": g["groupid"]}
+                for g in host.get(self._host_hg_key, [])
+                if g["groupid"] != host_grpid
+            ]
             if not remaining:
                 # Hosts must belong to at least one group — keep the original if this would leave none
-                print(f"ZabbixSync: skipping removal of '{hostname}' from '{team_name}' — would leave host with no group.")
+                print(
+                    f"ZabbixSync: skipping removal of '{hostname}' from '{team_name}' — would leave host with no group."
+                )
                 return
             self.zapi.host.update(hostid=host["hostid"], groups=remaining)
-            print(f"ZabbixSync: host '{hostname}' removed from Zabbix host group '{team_name}'.")
+            print(
+                f"ZabbixSync: host '{hostname}' removed from Zabbix host group '{team_name}'."
+            )
         except Exception as exc:
-            print(f"ZabbixSync.remove_host_from_team('{hostname}', '{team_name}') failed: {repr(exc)}")
+            print(
+                f"ZabbixSync.remove_host_from_team('{hostname}', '{team_name}') failed: {repr(exc)}"
+            )
 
     # ── Zabbix → Portal: full sync ────────────────────────────────────────────
 
@@ -474,7 +516,9 @@ class ZabbixSync(Zabbix_Base):
             print(f"ZabbixSync.full_sync: failed to fetch users: {repr(exc)}")
             return
 
-        zabbix_usernames = {u.get(self._ufield, "").strip().lower() for u in zabbix_users}
+        zabbix_usernames = {
+            u.get(self._ufield, "").strip().lower() for u in zabbix_users
+        }
 
         # ── 2. Users: import new ones and update changed existing ones ───────
         try:
@@ -509,9 +553,14 @@ class ZabbixSync(Zabbix_Base):
                 if existing:
                     # Update role/team if changed in Zabbix
                     current_roles = set(existing.get("roles") or [])
-                    if current_roles != set(roles) or existing.get("team_id") != team_id:
+                    if (
+                        current_roles != set(roles)
+                        or existing.get("team_id") != team_id
+                    ):
                         um.update_user_profile(existing["id"], roles, team_id)
-                        print(f"ZabbixSync: updated '{username}' → roles={roles}, team_id={team_id}.")
+                        print(
+                            f"ZabbixSync: updated '{username}' → roles={roles}, team_id={team_id}."
+                        )
                 else:
                     temp_password = secrets.token_urlsafe(16)
                     um.create_user(
@@ -520,7 +569,9 @@ class ZabbixSync(Zabbix_Base):
                         roles=roles,
                         team_id=team_id,
                     )
-                    print(f"ZabbixSync: auto-imported new Zabbix user '{username}' → portal.")
+                    print(
+                        f"ZabbixSync: auto-imported new Zabbix user '{username}' → portal."
+                    )
         except Exception as exc:
             print(f"ZabbixSync.full_sync: user import failed: {repr(exc)}")
 
@@ -531,16 +582,20 @@ class ZabbixSync(Zabbix_Base):
                     continue
                 if u["username"].lower() not in zabbix_usernames:
                     um.delete_user(u["id"])
-                    print(f"ZabbixSync: removed portal user '{u['username']}' — deleted from Zabbix.")
+                    print(
+                        f"ZabbixSync: removed portal user '{u['username']}' — deleted from Zabbix."
+                    )
         except Exception as exc:
             print(f"ZabbixSync.full_sync: user deletion sync failed: {repr(exc)}")
 
         # ── 4. Groups: import new Zabbix user groups as portal teams; remove deleted ──
         try:
             zabbix_groups = self.zapi.usergroup.get(output=["usrgrpid", "name"])
-            zabbix_group_names = {zg["name"].strip() for zg in zabbix_groups if zg.get("name")}
-            portal_teams = um.list_teams()
-            portal_team_names = {t["name"] for t in portal_teams}
+            zabbix_group_names = {
+                zg["name"].strip() for zg in zabbix_groups if zg.get("name")
+            }
+            portal_team_list = um.list_teams()
+            portal_team_names = {t["name"] for t in portal_team_list}
 
             # Import new groups
             for zg in zabbix_groups:
@@ -549,16 +604,20 @@ class ZabbixSync(Zabbix_Base):
                     continue
                 if name not in portal_team_names:
                     um.create_team(name)
-                    print(f"ZabbixSync: imported new Zabbix group '{name}' as portal team.")
+                    print(
+                        f"ZabbixSync: imported new Zabbix group '{name}' as portal team."
+                    )
 
             # Remove portal teams whose Zabbix user group was deleted
-            for team in portal_teams:
+            for team in portal_team_list:
                 name = team["name"]
                 if name in _GROUP_ROLE_MAP or name == _DEFAULT_GROUP:
                     continue
                 if name not in zabbix_group_names:
                     um.delete_team(team["id"])
-                    print(f"ZabbixSync: removed portal team '{name}' — Zabbix group deleted.")
+                    print(
+                        f"ZabbixSync: removed portal team '{name}' — Zabbix group deleted."
+                    )
         except Exception as exc:
             print(f"ZabbixSync.full_sync: group sync failed: {repr(exc)}")
 
@@ -590,7 +649,9 @@ class ZabbixSync(Zabbix_Base):
                 for hostname in team.get("hosts", []):
                     if (hostname, team_name) not in zabbix_assignments:
                         um.unassign_host(hostname)
-                        print(f"ZabbixSync: removed portal assignment '{hostname}' → '{team_name}' — no longer in Zabbix group.")
+                        print(
+                            f"ZabbixSync: removed portal assignment '{hostname}' → '{team_name}' — no longer in Zabbix group."
+                        )
         except Exception as exc:
             print(f"ZabbixSync.full_sync: host assignment sync failed: {repr(exc)}")
 
@@ -619,7 +680,9 @@ class ZabbixSync(Zabbix_Base):
                 conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
                 with conn.cursor() as cur:
                     cur.execute("LISTEN zabbix_changes;")
-                print("ZabbixSync: real-time listener active — syncing on Zabbix DB changes.")
+                print(
+                    "ZabbixSync: real-time listener active — syncing on Zabbix DB changes."
+                )
                 while True:
                     if sel.select([conn], [], [], 5.0)[0]:
                         conn.poll()

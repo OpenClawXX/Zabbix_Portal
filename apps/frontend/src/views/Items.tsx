@@ -1,5 +1,6 @@
 "use client";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import PlaylistAddOutlinedIcon from "@mui/icons-material/PlaylistAddOutlined";
 import SearchOutlinedIcon from "@mui/icons-material/SearchOutlined";
 import {
   Alert,
@@ -18,7 +19,6 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { useTheme } from "@mui/material/styles";
 import { useState } from "react";
 import { api } from "../app/api";
 
@@ -39,13 +39,15 @@ const operators = [
   { value: "<>", label: "<>" },
 ];
 
+// Matches the alert-rule severity scale (see Metrics.tsx / AppShell.tsx).
+// Zabbix trigger priority is 0–5; these are the display labels for each level.
 const severities = [
-  { value: 0, label: "Not classified" },
-  { value: 1, label: "Information" },
-  { value: 2, label: "Warning" },
-  { value: 3, label: "Average" },
+  { value: 0, label: "None" },
+  { value: 1, label: "Info" },
+  { value: 2, label: "Low" },
+  { value: 3, label: "Medium" },
   { value: 4, label: "High" },
-  { value: 5, label: "Disaster" },
+  { value: 5, label: "Critical" },
 ];
 
 const severityColor = (p: string): "default" | "info" | "warning" | "error" => {
@@ -56,12 +58,15 @@ const severityColor = (p: string): "default" | "info" | "warning" | "error" => {
 };
 
 type Item = { itemid: string; name: string; key_: string; value_type: string; delay: string };
-type Trigger = { triggerid: string; description: string; expression: string; priority: string; status: string };
+type Trigger = {
+  triggerid: string;
+  description: string;
+  expression: string;
+  priority: string;
+  status: string;
+};
 
 export const Items = () => {
-  const theme = useTheme();
-  const isDark = theme.palette.mode === "dark";
-
   // ── Add item ──────────────────────────────────────────────────────────
   const [hostname, setHostname] = useState("");
   const [itemName, setItemName] = useState("");
@@ -87,8 +92,14 @@ export const Items = () => {
   const [loadingTriggers, setLoadingTriggers] = useState(false);
 
   // ── Toast ─────────────────────────────────────────────────────────────
-  const [toast, setToast] = useState<{ open: boolean; message: string; severity: "success" | "error" }>({
-    open: false, message: "", severity: "success",
+  const [toast, setToast] = useState<{
+    open: boolean;
+    message: string;
+    severity: "success" | "error";
+  }>({
+    open: false,
+    message: "",
+    severity: "success",
   });
   const showToast = (message: string, severity: "success" | "error") =>
     setToast({ open: true, message, severity });
@@ -96,7 +107,12 @@ export const Items = () => {
   // ── Handlers ─────────────────────────────────────────────────────────
   const onCreate = async () => {
     try {
-      await api.addItem({ hostname, item_name: itemName, item_key: itemKey, value_type: valueType });
+      await api.addItem({
+        hostname,
+        item_name: itemName,
+        item_key: itemKey,
+        value_type: valueType,
+      });
       showToast("Item added successfully.", "success");
       setItemName("");
       setItemKey("");
@@ -112,7 +128,14 @@ export const Items = () => {
       return;
     }
     try {
-      await api.addTrigger({ hostname: triggerHost, item_key: triggerItemKey, trigger_name: triggerName, operator, threshold: parsedThreshold, severity });
+      await api.addTrigger({
+        hostname: triggerHost,
+        item_key: triggerItemKey,
+        trigger_name: triggerName,
+        operator,
+        threshold: parsedThreshold,
+        severity,
+      });
       showToast("Trigger added successfully.", "success");
       setTriggerName("");
       setThreshold("");
@@ -151,7 +174,8 @@ export const Items = () => {
     try {
       const res = await api.listTriggers(searchTriggerHost.trim());
       setTriggers(res.triggers);
-      if (res.triggers.length === 0) showToast("No custom triggers found for this host.", "success");
+      if (res.triggers.length === 0)
+        showToast("No custom triggers found for this host.", "success");
     } catch (e) {
       showToast(e instanceof Error ? e.message : String(e), "error");
     } finally {
@@ -171,28 +195,63 @@ export const Items = () => {
 
   return (
     <Stack spacing={3}>
-      <Box>
-        <Typography variant="h5" sx={{ fontWeight: 800 }}>Items & Triggers</Typography>
-        <Typography color="text.secondary">Add or remove monitoring items and alert triggers.</Typography>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
+        <PlaylistAddOutlinedIcon sx={{ fontSize: 28, color: "primary.main" }} />
+        <Box>
+          <Typography variant="h5" sx={{ fontWeight: 700 }}>
+            Items & Triggers
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Add or remove monitoring items and alert triggers.
+          </Typography>
+        </Box>
       </Box>
 
       {/* ── Add item ── */}
       <Card>
         <CardContent>
           <Stack spacing={2}>
-            <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>Add item</Typography>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+              Add item
+            </Typography>
             <Typography color="text.secondary" variant="body2">
               Attach a new metric check to an existing host.
             </Typography>
             <Divider />
-            <TextField label="Hostname" value={hostname} onChange={(e) => setHostname(e.target.value)} />
-            <TextField label="Item name" value={itemName} onChange={(e) => setItemName(e.target.value)} />
-            <TextField label="Item key" value={itemKey} onChange={(e) => setItemKey(e.target.value)} />
-            <TextField select label="Value type" value={valueType} onChange={(e) => setValueType(Number(e.target.value))}>
-              {valueTypes.map((t) => <MenuItem key={t.value} value={t.value}>{t.label}</MenuItem>)}
+            <TextField
+              label="Hostname"
+              value={hostname}
+              onChange={(e) => setHostname(e.target.value)}
+            />
+            <TextField
+              label="Item name"
+              value={itemName}
+              onChange={(e) => setItemName(e.target.value)}
+            />
+            <TextField
+              label="Item key"
+              value={itemKey}
+              onChange={(e) => setItemKey(e.target.value)}
+            />
+            <TextField
+              select
+              label="Value type"
+              value={valueType}
+              onChange={(e) => setValueType(Number(e.target.value))}
+            >
+              {valueTypes.map((t) => (
+                <MenuItem key={t.value} value={t.value}>
+                  {t.label}
+                </MenuItem>
+              ))}
             </TextField>
             <Box>
-              <Button variant="contained" color="secondary" onClick={onCreate} disabled={!hostname || !itemName || !itemKey}>
+              <Button
+                variant="contained"
+                color="secondary"
+                onClick={onCreate}
+                disabled={!hostname || !itemName || !itemKey}
+              >
                 Add item
               </Button>
             </Box>
@@ -204,7 +263,9 @@ export const Items = () => {
       <Card>
         <CardContent>
           <Stack spacing={2}>
-            <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>Delete item</Typography>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+              Delete item
+            </Typography>
             <Typography color="text.secondary" variant="body2">
               Look up a host's custom items and remove the ones you no longer need.
             </Typography>
@@ -214,7 +275,9 @@ export const Items = () => {
                 label="Hostname"
                 value={searchItemHost}
                 onChange={(e) => setSearchItemHost(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") void onLoadItems(); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void onLoadItems();
+                }}
                 fullWidth
               />
               <Button
@@ -239,18 +302,25 @@ export const Items = () => {
                       px: 1.5,
                       py: 1,
                       borderRadius: 1.5,
-                      border: isDark ? "1px solid rgba(255,255,255,0.08)" : "1px solid rgba(15,23,42,0.1)",
-                      backgroundColor: isDark ? "rgba(255,255,255,0.03)" : "rgba(15,23,42,0.03)",
+                      border: "1px solid",
+                      borderColor: "divider",
+                      backgroundColor: "action.hover",
                     }}
                   >
                     <Box sx={{ minWidth: 0 }}>
-                      <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap>{item.name}</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap>
+                        {item.name}
+                      </Typography>
                       <Typography variant="caption" color="text.secondary" noWrap>
                         {item.key_} · every {item.delay}
                       </Typography>
                     </Box>
                     <Tooltip title="Delete item">
-                      <IconButton color="error" size="small" onClick={() => void onDeleteItem(item.itemid)}>
+                      <IconButton
+                        color="error"
+                        size="small"
+                        onClick={() => void onDeleteItem(item.itemid)}
+                      >
                         <DeleteOutlineIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
@@ -266,25 +336,70 @@ export const Items = () => {
       <Card>
         <CardContent>
           <Stack spacing={2}>
-            <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>Add trigger</Typography>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+              Add trigger
+            </Typography>
             <Typography color="text.secondary" variant="body2">
               Create an alert rule on an existing item key (expression uses <code>.last()</code>).
             </Typography>
             <Divider />
-            <TextField label="Hostname" value={triggerHost} onChange={(e) => setTriggerHost(e.target.value)} />
-            <TextField label="Item key" value={triggerItemKey} onChange={(e) => setTriggerItemKey(e.target.value)} helperText="Example: system.cpu.load" />
-            <TextField label="Trigger name" value={triggerName} onChange={(e) => setTriggerName(e.target.value)} />
+            <TextField
+              label="Hostname"
+              value={triggerHost}
+              onChange={(e) => setTriggerHost(e.target.value)}
+            />
+            <TextField
+              label="Item key"
+              value={triggerItemKey}
+              onChange={(e) => setTriggerItemKey(e.target.value)}
+              helperText="Example: system.cpu.load"
+            />
+            <TextField
+              label="Trigger name"
+              value={triggerName}
+              onChange={(e) => setTriggerName(e.target.value)}
+            />
             <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
-              <TextField select label="Operator" value={operator} onChange={(e) => setOperator(e.target.value)} fullWidth>
-                {operators.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
+              <TextField
+                select
+                label="Operator"
+                value={operator}
+                onChange={(e) => setOperator(e.target.value)}
+                fullWidth
+              >
+                {operators.map((o) => (
+                  <MenuItem key={o.value} value={o.value}>
+                    {o.label}
+                  </MenuItem>
+                ))}
               </TextField>
-              <TextField label="Threshold" value={threshold} onChange={(e) => setThreshold(e.target.value)} fullWidth />
+              <TextField
+                label="Threshold"
+                value={threshold}
+                onChange={(e) => setThreshold(e.target.value)}
+                fullWidth
+              />
             </Stack>
-            <TextField select label="Severity" value={severity} onChange={(e) => setSeverity(Number(e.target.value))}>
-              {severities.map((s) => <MenuItem key={s.value} value={s.value}>{s.label}</MenuItem>)}
+            <TextField
+              select
+              label="Severity"
+              value={severity}
+              onChange={(e) => setSeverity(Number(e.target.value))}
+            >
+              {severities.map((s) => (
+                <MenuItem key={s.value} value={s.value}>
+                  {s.label}
+                </MenuItem>
+              ))}
             </TextField>
             <Box>
-              <Button variant="contained" onClick={onCreateTrigger} disabled={!triggerHost || !triggerItemKey || !triggerName || threshold.trim() === ""}>
+              <Button
+                variant="contained"
+                onClick={onCreateTrigger}
+                disabled={
+                  !triggerHost || !triggerItemKey || !triggerName || threshold.trim() === ""
+                }
+              >
                 Add trigger
               </Button>
             </Box>
@@ -296,7 +411,9 @@ export const Items = () => {
       <Card>
         <CardContent>
           <Stack spacing={2}>
-            <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>Delete trigger</Typography>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+              Delete trigger
+            </Typography>
             <Typography color="text.secondary" variant="body2">
               Look up a host's custom triggers and remove the ones you no longer need.
             </Typography>
@@ -306,14 +423,18 @@ export const Items = () => {
                 label="Hostname"
                 value={searchTriggerHost}
                 onChange={(e) => setSearchTriggerHost(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") void onLoadTriggers(); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void onLoadTriggers();
+                }}
                 fullWidth
               />
               <Button
                 variant="outlined"
                 onClick={onLoadTriggers}
                 disabled={!searchTriggerHost.trim() || loadingTriggers}
-                startIcon={loadingTriggers ? <CircularProgress size={16} /> : <SearchOutlinedIcon />}
+                startIcon={
+                  loadingTriggers ? <CircularProgress size={16} /> : <SearchOutlinedIcon />
+                }
                 sx={{ whiteSpace: "nowrap", minWidth: 100 }}
               >
                 Load
@@ -331,13 +452,16 @@ export const Items = () => {
                       px: 1.5,
                       py: 1,
                       borderRadius: 1.5,
-                      border: isDark ? "1px solid rgba(255,255,255,0.08)" : "1px solid rgba(15,23,42,0.1)",
-                      backgroundColor: isDark ? "rgba(255,255,255,0.03)" : "rgba(15,23,42,0.03)",
+                      border: "1px solid",
+                      borderColor: "divider",
+                      backgroundColor: "action.hover",
                     }}
                   >
                     <Box sx={{ minWidth: 0, flex: 1 }}>
                       <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                        <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap>{t.description}</Typography>
+                        <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap>
+                          {t.description}
+                        </Typography>
                         <Chip
                           label={severities[Number(t.priority)]?.label ?? t.priority}
                           size="small"
@@ -345,12 +469,22 @@ export const Items = () => {
                           sx={{ height: 18, fontSize: "0.6rem", flexShrink: 0 }}
                         />
                       </Box>
-                      <Typography variant="caption" color="text.secondary" sx={{ display: "block" }} noWrap>
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{ display: "block" }}
+                        noWrap
+                      >
                         {t.expression}
                       </Typography>
                     </Box>
                     <Tooltip title="Delete trigger">
-                      <IconButton color="error" size="small" onClick={() => void onDeleteTrigger(t.triggerid)} sx={{ ml: 1, flexShrink: 0 }}>
+                      <IconButton
+                        color="error"
+                        size="small"
+                        onClick={() => void onDeleteTrigger(t.triggerid)}
+                        sx={{ ml: 1, flexShrink: 0 }}
+                      >
                         <DeleteOutlineIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
@@ -368,7 +502,12 @@ export const Items = () => {
         onClose={() => setToast((t) => ({ ...t, open: false }))}
         anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
       >
-        <Alert onClose={() => setToast((t) => ({ ...t, open: false }))} severity={toast.severity} variant="filled" sx={{ width: "100%" }}>
+        <Alert
+          onClose={() => setToast((t) => ({ ...t, open: false }))}
+          severity={toast.severity}
+          variant="filled"
+          sx={{ width: "100%" }}
+        >
           {toast.message}
         </Alert>
       </Snackbar>

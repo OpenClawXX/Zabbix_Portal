@@ -29,8 +29,8 @@ node_modules/
 **/node_modules/
 apps/frontend/dist/
 apps/frontend/.vite/
-# package-lock.json is intentionally tracked — required for npm ci in CI/CD
 pnpm-lock.yaml.bak
+.ruff_cache/
 
 # TypeScript incremental build
 *.tsbuildinfo

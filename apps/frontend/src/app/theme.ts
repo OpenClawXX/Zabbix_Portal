@@ -94,9 +94,7 @@ export const createAppTheme = (mode: "dark" | "light") => {
             transition: "border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease",
             "&:hover": {
               borderColor: isDark ? "rgba(255,255,255,0.13)" : "rgba(59,130,246,0.25)",
-              boxShadow: isDark
-                ? "0 8px 24px rgba(0,0,0,0.4)"
-                : "0 4px 20px rgba(15,23,42,0.1)",
+              boxShadow: isDark ? "0 8px 24px rgba(0,0,0,0.4)" : "0 4px 20px rgba(15,23,42,0.1)",
             },
           },
         },
@@ -171,7 +169,32 @@ export const createAppTheme = (mode: "dark" | "light") => {
       MuiAlert: {
         styleOverrides: { root: { borderRadius: 8, fontSize: "0.8125rem" } },
       },
+      MuiTableCell: {
+        styleOverrides: {
+          root: {
+            borderColor: isDark ? "rgba(255,255,255,0.05)" : "rgba(15,23,42,0.06)",
+            fontSize: "0.8125rem",
+          },
+          head: {
+            fontWeight: 700,
+            fontSize: "0.72rem",
+            textTransform: "uppercase",
+            letterSpacing: "0.05em",
+            color: isDark ? "#64748B" : "#94A3B8",
+            backgroundColor: isDark ? "rgba(11,22,40,0.5)" : "rgba(241,245,249,0.8)",
+          },
+        },
+      },
+      MuiTableRow: {
+        styleOverrides: {
+          root: {
+            "&:last-child td": { borderBottom: 0 },
+            "&:hover": {
+              backgroundColor: isDark ? "rgba(255,255,255,0.025)" : "rgba(15,23,42,0.025)",
+            },
+          },
+        },
+      },
     },
   });
 };
-

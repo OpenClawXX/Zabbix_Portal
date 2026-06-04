@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import type { PropsWithChildren } from "react";
-import { clearToken, getToken, parseToken, setToken, type AuthUser } from "../../lib/auth";
+import { type AuthUser, clearToken, getToken, parseToken, setToken } from "../../lib/auth";
 import { api } from "../api";
 
 type AuthContextType = {
@@ -37,9 +37,7 @@ export const AuthProvider = ({ children }: PropsWithChildren) => {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
-      {children}
-    </AuthContext.Provider>
+    <AuthContext.Provider value={{ user, loading, login, logout }}>{children}</AuthContext.Provider>
   );
 };
 

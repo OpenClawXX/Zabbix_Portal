@@ -32,9 +32,8 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useState } from "react";
-import { useTheme } from "@mui/material/styles";
+import { type Host, type Team, type TeamUser, api } from "../app/api";
 import { useAuth } from "../app/context/AuthContext";
-import { api, type Host, type Team, type TeamUser } from "../app/api";
 import { useSync } from "../app/context/SyncContext";
 
 type Snack = { msg: string; sev: "success" | "error" };
@@ -50,7 +49,8 @@ const ROLE_OPTIONS = [
     value: "operator",
     label: "Operator",
     color: "#10B981",
-    description: "Create and delete hosts, items, and triggers within the team. Cannot manage users.",
+    description:
+      "Create and delete hosts, items, and triggers within the team. Cannot manage users.",
   },
   {
     value: "member",
@@ -71,9 +71,7 @@ const ROLE_HIERARCHY = ["member", "operator", "team_lead"] as const;
 const cascadeSelect = (current: string[], clicked: string): string[] => {
   const idx = (ROLE_HIERARCHY as readonly string[]).indexOf(clicked);
   if (idx === -1) {
-    return current.includes(clicked)
-      ? current.filter((r) => r !== clicked)
-      : [...current, clicked];
+    return current.includes(clicked) ? current.filter((r) => r !== clicked) : [...current, clicked];
   }
   if (current.includes(clicked)) {
     const toRemove = new Set((ROLE_HIERARCHY as readonly string[]).slice(idx));
@@ -92,7 +90,8 @@ const isInherited = (role: string, selected: string[]): boolean => {
 const ROLE_LEVELS: Record<string, number> = { member: 1, operator: 2, team_lead: 3, root: 4 };
 
 const grantableRoles = (callerRoles: string[]): Set<string> => {
-  if (callerRoles.includes("root")) return new Set(["member", "operator", "team_lead", "auditor", "root"]);
+  if (callerRoles.includes("root"))
+    return new Set(["member", "operator", "team_lead", "auditor", "root"]);
   const max = Math.max(0, ...callerRoles.map((r) => ROLE_LEVELS[r] ?? 0));
   return new Set(
     Object.entries(ROLE_LEVELS)
@@ -102,8 +101,17 @@ const grantableRoles = (callerRoles: string[]): Set<string> => {
 };
 
 const roleColor = (r: string): "error" | "primary" | "secondary" | "warning" | "default" =>
-  r === "root" ? "error" : r === "team_lead" ? "primary" : r === "operator" ? "secondary" : r === "auditor" ? "warning" : "default";
-const roleLabel = (r: string) => (r === "team_lead" ? "Team Lead" : r.charAt(0).toUpperCase() + r.slice(1));
+  r === "root"
+    ? "error"
+    : r === "team_lead"
+      ? "primary"
+      : r === "operator"
+        ? "secondary"
+        : r === "auditor"
+          ? "warning"
+          : "default";
+const roleLabel = (r: string) =>
+  r === "team_lead" ? "Team Lead" : r.charAt(0).toUpperCase() + r.slice(1);
 
 export const Teams = () => {
   const { lastSync } = useSync();
@@ -121,8 +129,6 @@ export const Teams = () => {
   const [teamName, setTeamName] = useState("");
   const [teamDesc, setTeamDesc] = useState("");
   const { user: currentUser } = useAuth();
-  const theme = useTheme();
-  const isDark = theme.palette.mode === "dark";
   const isSuperadmin = currentUser?.roles?.includes("root") ?? false;
   const isAdmin = isSuperadmin || (currentUser?.roles?.includes("team_lead") ?? false);
 
@@ -138,10 +144,7 @@ export const Teams = () => {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [overview, hostsRes] = await Promise.all([
-        api.getTeamsOverview(),
-        api.listHosts(),
-      ]);
+      const [overview, hostsRes] = await Promise.all([api.getTeamsOverview(), api.listHosts()]);
       setTeams(overview.teams);
       setAllHosts(hostsRes.hosts);
     } catch {
@@ -151,7 +154,10 @@ export const Teams = () => {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load, lastSync]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: lastSync triggers re-fetch on sync events
+  useEffect(() => {
+    void load();
+  }, [load, lastSync]);
 
   // ── Derived: hosts not assigned to any team ──────────────────────────
   const assignedHostnames = new Set(teams.flatMap((t) => t.hosts));
@@ -329,12 +335,17 @@ export const Teams = () => {
                 team={team}
                 canManage={isSuperadmin || (isAdmin && currentUser?.team_id === team.id)}
                 canDeleteTeam={isSuperadmin}
-                isDark={isDark}
                 onDeleteTeam={handleDeleteTeam}
                 onDeleteUser={handleDeleteUser}
-                onChangePassword={(u) => { setChangePwUser(u); setNewPw(""); }}
+                onChangePassword={(u) => {
+                  setChangePwUser(u);
+                  setNewPw("");
+                }}
                 onUnassignHost={handleUnassignHost}
-                onAssignHost={() => { setAssignDialogTeamId(team.id); setSelectedHost(""); }}
+                onAssignHost={() => {
+                  setAssignDialogTeamId(team.id);
+                  setSelectedHost("");
+                }}
                 hostStatusColor={hostStatusColor}
               />
             </Grid>
@@ -372,9 +383,16 @@ export const Teams = () => {
       )}
 
       {/* ── Create team dialog ── */}
-      <Dialog open={teamDialogOpen} onClose={() => setTeamDialogOpen(false)} fullWidth maxWidth="xs">
+      <Dialog
+        open={teamDialogOpen}
+        onClose={() => setTeamDialogOpen(false)}
+        fullWidth
+        maxWidth="xs"
+      >
         <DialogTitle>New Team</DialogTitle>
-        <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: "16px !important" }}>
+        <DialogContent
+          sx={{ display: "flex", flexDirection: "column", gap: 2, pt: "16px !important" }}
+        >
           <TextField
             label="Team name"
             value={teamName}
@@ -400,9 +418,16 @@ export const Teams = () => {
       </Dialog>
 
       {/* ── Create user dialog ── */}
-      <Dialog open={userDialogOpen} onClose={() => setUserDialogOpen(false)} fullWidth maxWidth="xs">
+      <Dialog
+        open={userDialogOpen}
+        onClose={() => setUserDialogOpen(false)}
+        fullWidth
+        maxWidth="xs"
+      >
         <DialogTitle>New User</DialogTitle>
-        <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: "16px !important" }}>
+        <DialogContent
+          sx={{ display: "flex", flexDirection: "column", gap: 2, pt: "16px !important" }}
+        >
           <TextField
             label="Username"
             value={username}
@@ -424,11 +449,16 @@ export const Teams = () => {
             fullWidth
           />
           <Box>
-            <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 500, mb: 1, display: "block" }}>
+            <Typography
+              variant="caption"
+              sx={{ color: "text.secondary", fontWeight: 500, mb: 1, display: "block" }}
+            >
               Roles — select one or more
             </Typography>
             <Box sx={{ display: "flex", flexDirection: "column", gap: 0.75 }}>
-              {ROLE_OPTIONS.filter((r) => grantableRoles(currentUser?.roles ?? []).has(r.value)).map((r) => {
+              {ROLE_OPTIONS.filter((r) =>
+                grantableRoles(currentUser?.roles ?? []).has(r.value),
+              ).map((r) => {
                 const selected = userRoles.includes(r.value);
                 const inherited = isInherited(r.value, userRoles);
                 return (
@@ -442,11 +472,11 @@ export const Teams = () => {
                       px: 1.5,
                       py: 1,
                       borderRadius: 2,
-                      border: `1px solid ${selected ? r.color + "55" : "rgba(148,163,184,0.2)"}`,
-                      backgroundColor: selected ? r.color + "12" : "transparent",
+                      border: `1px solid ${selected ? `${r.color}55` : "rgba(148,163,184,0.2)"}`,
+                      backgroundColor: selected ? `${r.color}12` : "transparent",
                       cursor: "pointer",
                       transition: "all 0.15s ease",
-                      "&:hover": { borderColor: r.color + "88", backgroundColor: r.color + "08" },
+                      "&:hover": { borderColor: `${r.color}88`, backgroundColor: `${r.color}08` },
                     }}
                   >
                     <Checkbox
@@ -457,11 +487,26 @@ export const Teams = () => {
                     />
                     <Box sx={{ flex: 1 }}>
                       <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
-                        <Typography variant="body2" sx={{ fontWeight: 600, color: selected ? r.color : "text.primary", lineHeight: 1.3 }}>
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            fontWeight: 600,
+                            color: selected ? r.color : "text.primary",
+                            lineHeight: 1.3,
+                          }}
+                        >
                           {r.label}
                         </Typography>
                         {inherited && (
-                          <Typography variant="caption" sx={{ color: r.color, opacity: 0.7, fontSize: "0.6rem", fontWeight: 500 }}>
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: r.color,
+                              opacity: 0.7,
+                              fontSize: "0.6rem",
+                              fontWeight: 500,
+                            }}
+                          >
                             inherited
                           </Typography>
                         )}
@@ -480,11 +525,15 @@ export const Teams = () => {
             <Select
               value={userTeamId}
               label="Team (optional)"
-              onChange={(e: SelectChangeEvent<number | "">) => setUserTeamId(e.target.value as number | "")}
+              onChange={(e: SelectChangeEvent<number | "">) =>
+                setUserTeamId(e.target.value as number | "")
+              }
             >
               <MenuItem value="">— No team —</MenuItem>
               {teams.map((t: Team) => (
-                <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>
+                <MenuItem key={t.id} value={t.id}>
+                  {t.name}
+                </MenuItem>
               ))}
             </Select>
           </FormControl>
@@ -514,10 +563,14 @@ export const Teams = () => {
               onChange={(e: SelectChangeEvent) => setSelectedHost(e.target.value)}
             >
               {unassignedHosts.length === 0 ? (
-                <MenuItem disabled value="">All servers are assigned</MenuItem>
+                <MenuItem disabled value="">
+                  All servers are assigned
+                </MenuItem>
               ) : (
                 unassignedHosts.map((h: Host) => (
-                  <MenuItem key={h.hostid} value={h.host}>{h.host}</MenuItem>
+                  <MenuItem key={h.hostid} value={h.host}>
+                    {h.host}
+                  </MenuItem>
                 ))
               )}
             </Select>
@@ -532,7 +585,12 @@ export const Teams = () => {
       </Dialog>
 
       {/* ── Change password dialog ── */}
-      <Dialog open={changePwUser !== null} onClose={() => setChangePwUser(null)} fullWidth maxWidth="xs">
+      <Dialog
+        open={changePwUser !== null}
+        onClose={() => setChangePwUser(null)}
+        fullWidth
+        maxWidth="xs"
+      >
         <DialogTitle>Change Password — {changePwUser?.username}</DialogTitle>
         <DialogContent sx={{ pt: "16px !important" }}>
           <TextField
@@ -573,7 +631,6 @@ type TeamCardProps = {
   team: Team;
   canManage: boolean;
   canDeleteTeam: boolean;
-  isDark: boolean;
   onDeleteTeam: (id: number) => void;
   onDeleteUser: (id: number) => void;
   onChangePassword: (user: TeamUser) => void;
@@ -586,7 +643,6 @@ const TeamCard = ({
   team,
   canManage,
   canDeleteTeam,
-  isDark,
   onDeleteTeam,
   onDeleteUser,
   onChangePassword,
@@ -626,7 +682,9 @@ const TeamCard = ({
         </Typography>
         <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5, mt: 0.75 }}>
           {team.users.length === 0 ? (
-            <Typography variant="body2" color="text.disabled">No members</Typography>
+            <Typography variant="body2" color="text.disabled">
+              No members
+            </Typography>
           ) : (
             team.users.map((u: TeamUser) => (
               <Box
@@ -638,8 +696,9 @@ const TeamCard = ({
                   px: 1,
                   py: 0.5,
                   borderRadius: 1.5,
-                  backgroundColor: isDark ? "rgba(255,255,255,0.04)" : "rgba(15,23,42,0.03)",
-                  border: `1px solid ${isDark ? "rgba(255,255,255,0.07)" : "rgba(15,23,42,0.08)"}`,
+                  backgroundColor: "action.hover",
+                  border: "1px solid",
+                  borderColor: "divider",
                 }}
               >
                 <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
@@ -690,7 +749,9 @@ const TeamCard = ({
         </Typography>
         <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, mt: 0.75 }}>
           {team.hosts.length === 0 ? (
-            <Typography variant="body2" color="text.disabled">No servers assigned</Typography>
+            <Typography variant="body2" color="text.disabled">
+              No servers assigned
+            </Typography>
           ) : (
             team.hosts.map((hostname: string) => (
               <Chip

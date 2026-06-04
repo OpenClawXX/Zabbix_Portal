@@ -1,11 +1,15 @@
 "use client";
 
 import ComputerOutlinedIcon from "@mui/icons-material/ComputerOutlined";
+import VisibilityOffOutlinedIcon from "@mui/icons-material/VisibilityOffOutlined";
+import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
 import {
   Alert,
   Box,
   Button,
   CircularProgress,
+  IconButton,
+  InputAdornment,
   Snackbar,
   TextField,
   Typography,
@@ -21,6 +25,7 @@ export const Login = () => {
   const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [snack, setSnack] = useState<Snack>({ open: false, message: "", severity: "success" });
 
@@ -35,6 +40,8 @@ export const Login = () => {
       setSnack({ open: true, message: "Login successful! Redirecting…", severity: "success" });
       setTimeout(() => router.push("/"), 1200);
     } catch (err) {
+      setPassword("");
+      setShowPassword(false);
       setSnack({
         open: true,
         message: (err as Error).message || "Invalid username or password.",
@@ -95,9 +102,16 @@ export const Login = () => {
             p: { xs: 3, sm: 4 },
           }}
         >
-          <Box component="form" onSubmit={handleSubmit} sx={{ display: "flex", flexDirection: "column", gap: 2.5 }}>
+          <Box
+            component="form"
+            onSubmit={handleSubmit}
+            sx={{ display: "flex", flexDirection: "column", gap: 2.5 }}
+          >
             <Box>
-              <Typography variant="caption" sx={{ color: "#64748B", fontWeight: 500, mb: 0.75, display: "block" }}>
+              <Typography
+                variant="caption"
+                sx={{ color: "#64748B", fontWeight: 500, mb: 0.75, display: "block" }}
+              >
                 Username
               </Typography>
               <TextField
@@ -122,17 +136,37 @@ export const Login = () => {
             </Box>
 
             <Box>
-              <Typography variant="caption" sx={{ color: "#64748B", fontWeight: 500, mb: 0.75, display: "block" }}>
+              <Typography
+                variant="caption"
+                sx={{ color: "#64748B", fontWeight: 500, mb: 0.75, display: "block" }}
+              >
                 Password
               </Typography>
               <TextField
-                type="password"
+                type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 fullWidth
-                autoComplete="current-password"
+                autoComplete="off"
                 placeholder="••••••••"
                 size="small"
+                InputProps={{
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton
+                        onClick={() => setShowPassword((v) => !v)}
+                        edge="end"
+                        size="small"
+                        tabIndex={-1}
+                        sx={{ color: "#475569", "&:hover": { color: "#94A3B8" } }}
+                      >
+                        {showPassword
+                          ? <VisibilityOffOutlinedIcon sx={{ fontSize: 18 }} />
+                          : <VisibilityOutlinedIcon sx={{ fontSize: 18 }} />}
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                }}
                 sx={{
                   "& .MuiOutlinedInput-root": {
                     backgroundColor: "rgba(255,255,255,0.04)",
@@ -171,7 +205,10 @@ export const Login = () => {
           </Box>
         </Box>
 
-        <Typography variant="caption" sx={{ display: "block", textAlign: "center", mt: 3, color: "#1E3A5F" }}>
+        <Typography
+          variant="caption"
+          sx={{ display: "block", textAlign: "center", mt: 3, color: "#1E3A5F" }}
+        >
           Zabbix DevOps Control Plane · Internal Use Only
         </Typography>
       </Box>
@@ -192,9 +229,10 @@ export const Login = () => {
             fontSize: "0.8125rem",
             fontWeight: 500,
             minWidth: 280,
-            boxShadow: snack.severity === "success"
-              ? "0 4px 20px rgba(34,197,94,0.4)"
-              : "0 4px 20px rgba(239,68,68,0.4)",
+            boxShadow:
+              snack.severity === "success"
+                ? "0 4px 20px rgba(34,197,94,0.4)"
+                : "0 4px 20px rgba(239,68,68,0.4)",
           }}
         >
           {snack.message}

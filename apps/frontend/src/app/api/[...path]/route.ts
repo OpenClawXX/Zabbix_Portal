@@ -2,10 +2,7 @@ import { type NextRequest, NextResponse } from "next/server";
 
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:6769";
 
-const proxy = async (
-  request: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> },
-) => {
+const proxy = async (request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) => {
   const { path } = await params;
   const url = `${BACKEND_URL}/${path.join("/")}${request.nextUrl.search}`;
 

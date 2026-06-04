@@ -6,6 +6,8 @@ import PeopleOutlinedIcon from "@mui/icons-material/PeopleOutlined";
 import PersonAddOutlinedIcon from "@mui/icons-material/PersonAddOutlined";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import SearchIcon from "@mui/icons-material/Search";
+import VisibilityIcon from "@mui/icons-material/Visibility";
+import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import {
   Alert,
   Avatar,
@@ -35,20 +37,46 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useState } from "react";
-import { useTheme } from "@mui/material/styles";
+import { type Team, type UserRow, api } from "../app/api";
 import { useAuth } from "../app/context/AuthContext";
-import { api, type Team, type UserRow } from "../app/api";
 import { useSync } from "../app/context/SyncContext";
 
 // Role definitions — ordered from highest to lowest privilege.
 // root and auditor are standalone toggles (not part of the cascade chain).
 // team_lead → operator → member cascade: checking a higher role auto-checks lower ones.
 const ROLE_OPTIONS = [
-  { value: "root",      label: "Root",      color: "#EF4444", description: "Full platform access across all teams. Can manage all users, teams, and hosts, and grant any role." },
-  { value: "team_lead", label: "Team Lead", color: "#3B82F6", description: "Full team management — add/remove users, assign hosts, reset passwords." },
-  { value: "operator",  label: "Operator",  color: "#10B981", description: "Create/delete hosts and monitoring within the team. No user management." },
-  { value: "member",    label: "Member",    color: "#64748B", description: "Read-only access to the team's own hosts." },
-  { value: "auditor",   label: "Auditor",   color: "#F59E0B", description: "Read-only across ALL teams. For compliance and security reviews. Only root can grant this." },
+  {
+    value: "root",
+    label: "Root",
+    color: "#EF4444",
+    description:
+      "Full platform access across all teams. Can manage all users, teams, and hosts, and grant any role.",
+  },
+  {
+    value: "team_lead",
+    label: "Team Lead",
+    color: "#3B82F6",
+    description: "Full team management — add/remove users, assign hosts, reset passwords.",
+  },
+  {
+    value: "operator",
+    label: "Operator",
+    color: "#10B981",
+    description: "Create/delete hosts and monitoring within the team. No user management.",
+  },
+  {
+    value: "member",
+    label: "Member",
+    color: "#64748B",
+    description: "Read-only access to the team's own hosts.",
+  },
+  {
+    value: "auditor",
+    label: "Auditor",
+    color: "#F59E0B",
+    description:
+      "Read-only across ALL teams. For compliance and security reviews. Only root can grant this.",
+  },
 ] as const;
 
 // Hierarchy from lowest to highest (auditor is standalone — not part of the chain)
@@ -58,14 +86,18 @@ const cascadeSelect = (current: string[], clicked: string): string[] => {
   const idx = (ROLE_HIERARCHY as readonly string[]).indexOf(clicked);
   if (idx === -1) {
     // auditor: simple toggle, no cascade
-    return current.includes(clicked)
-      ? current.filter((r) => r !== clicked)
-      : [...current, clicked];
+    return current.includes(clicked) ? current.filter((r) => r !== clicked) : [...current, clicked];
   }
   if (current.includes(clicked)) {
-    // Unchecking: remove this role AND all higher roles
-    const toRemove = new Set((ROLE_HIERARCHY as readonly string[]).slice(idx));
-    return current.filter((r) => !toRemove.has(r));
+    // Unchecking: remove this role + all lower (reverse the cascade)
+    const toRemove = new Set((ROLE_HIERARCHY as readonly string[]).slice(0, idx + 1));
+    const afterRemoval = current.filter((r) => !toRemove.has(r));
+    // Also drop any higher hierarchy roles whose prerequisites were just removed
+    return afterRemoval.filter((r) => {
+      const rIdx = (ROLE_HIERARCHY as readonly string[]).indexOf(r);
+      if (rIdx === -1) return true; // root / auditor are unaffected
+      return (ROLE_HIERARCHY as readonly string[]).slice(0, rIdx).every((p) => afterRemoval.includes(p));
+    });
   }
   // Checking: add this role AND all lower roles
   const toAdd = (ROLE_HIERARCHY as readonly string[]).slice(0, idx + 1);
@@ -81,7 +113,8 @@ const isInherited = (role: string, selected: string[]): boolean => {
 const ROLE_LEVELS: Record<string, number> = { member: 1, operator: 2, team_lead: 3, root: 4 };
 
 const grantableRoles = (callerRoles: string[]): Set<string> => {
-  if (callerRoles.includes("root")) return new Set(["member", "operator", "team_lead", "auditor", "root"]);
+  if (callerRoles.includes("root"))
+    return new Set(["member", "operator", "team_lead", "auditor", "root"]);
   const max = Math.max(0, ...callerRoles.map((r) => ROLE_LEVELS[r] ?? 0));
   return new Set(
     Object.entries(ROLE_LEVELS)
@@ -91,13 +124,20 @@ const grantableRoles = (callerRoles: string[]): Set<string> => {
 };
 
 const roleColor = (r: string): "error" | "primary" | "secondary" | "warning" | "default" =>
-  r === "root" ? "error" : r === "team_lead" ? "primary" : r === "operator" ? "secondary" : r === "auditor" ? "warning" : "default";
+  r === "root"
+    ? "error"
+    : r === "team_lead"
+      ? "primary"
+      : r === "operator"
+        ? "secondary"
+        : r === "auditor"
+          ? "warning"
+          : "default";
 
 const roleLabel = (r: string) =>
   r === "team_lead" ? "Team Lead" : r.charAt(0).toUpperCase() + r.slice(1);
 
-const userInitials = (name: string) =>
-  name.slice(0, 2).toUpperCase();
+const userInitials = (name: string) => name.slice(0, 2).toUpperCase();
 
 const avatarColor = (name: string) => {
   const colors = ["#3B82F6", "#8B5CF6", "#10B981", "#F59E0B", "#EF4444", "#06B6D4"];
@@ -105,8 +145,6 @@ const avatarColor = (name: string) => {
 };
 
 export const Users = () => {
-  const theme = useTheme();
-  const isDark = theme.palette.mode === "dark";
   const { lastSync } = useSync();
   const { user: currentUser } = useAuth();
   const isRoot = currentUser?.roles?.includes("root") ?? false;
@@ -132,9 +170,12 @@ export const Users = () => {
   const [newUsername, setNewUsername] = useState("");
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
-  const [newRoles, setNewRoles] = useState<string[]>(["member"]);
+  const [newRoles, setNewRoles] = useState<string[]>([]);
   const [newTeamId, setNewTeamId] = useState<number | "">("");
 
+  const [confirmDelete, setConfirmDelete] = useState<UserRow | null>(null);
+  const [showNewPw, setShowNewPw] = useState(false);
+  const [showCreatePw, setShowCreatePw] = useState(false);
   const [snack, setSnack] = useState<{ msg: string; sev: "success" | "error" } | null>(null);
 
   const load = useCallback(async () => {
@@ -150,7 +191,10 @@ export const Users = () => {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load, lastSync]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: lastSync triggers re-fetch on sync events
+  useEffect(() => {
+    void load();
+  }, [load, lastSync]);
 
   const openEdit = (u: UserRow) => {
     setEditUser(u);
@@ -162,7 +206,7 @@ export const Users = () => {
     if (!editUser) return;
     try {
       await api.updateUser(editUser.id, {
-        roles: editRoles.length > 0 ? editRoles : ["member"],
+        roles: editRoles,
         team_id: editTeamId !== "" ? editTeamId : null,
       });
       setSnack({ msg: "User updated.", sev: "success" });
@@ -189,6 +233,7 @@ export const Users = () => {
     try {
       await api.deleteUser(u.id);
       setSnack({ msg: `User '${u.username}' deleted.`, sev: "success" });
+      setConfirmDelete(null);
       void load();
     } catch (e) {
       setSnack({ msg: (e as Error).message, sev: "error" });
@@ -202,13 +247,16 @@ export const Users = () => {
         username: newUsername.trim(),
         password: newPassword,
         email: newEmail.trim(),
-        roles: newRoles.length > 0 ? newRoles : ["member"],
+        roles: newRoles,
         team_id: newTeamId !== "" ? newTeamId : undefined,
       });
       setSnack({ msg: "User created.", sev: "success" });
       setCreateOpen(false);
-      setNewUsername(""); setNewEmail(""); setNewPassword("");
-      setNewRoles(["member"]); setNewTeamId("");
+      setNewUsername("");
+      setNewEmail("");
+      setNewPassword("");
+      setNewRoles([]);
+      setNewTeamId("");
       void load();
     } catch (e) {
       setSnack({ msg: (e as Error).message, sev: "error" });
@@ -219,7 +267,10 @@ export const Users = () => {
     setter((prev) => cascadeSelect(prev, value));
 
   const filtered = users.filter((u) => {
-    const matchSearch = !search || u.username.toLowerCase().includes(search.toLowerCase()) || u.email.toLowerCase().includes(search.toLowerCase());
+    const matchSearch =
+      !search ||
+      u.username.toLowerCase().includes(search.toLowerCase()) ||
+      u.email.toLowerCase().includes(search.toLowerCase());
     const matchTeam = filterTeam === "" || u.team_id === filterTeam;
     const matchRole = !filterRole || (u.roles ?? []).includes(filterRole);
     return matchSearch && matchTeam && matchRole;
@@ -243,23 +294,42 @@ export const Users = () => {
             key={r.value}
             onClick={() => toggleRole(onChange, r.value)}
             sx={{
-              display: "flex", alignItems: "flex-start", gap: 1.5,
-              px: 1.5, py: 1, borderRadius: 2, cursor: "pointer",
-              border: `1px solid ${checked ? r.color + "55" : "rgba(148,163,184,0.2)"}`,
-              backgroundColor: checked ? r.color + "12" : "transparent",
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 1.5,
+              px: 1.5,
+              py: 1,
+              borderRadius: 2,
+              cursor: "pointer",
+              border: `1px solid ${checked ? `${r.color}55` : "rgba(148,163,184,0.2)"}`,
+              backgroundColor: checked ? `${r.color}12` : "transparent",
               transition: "all 0.15s ease",
-              "&:hover": { borderColor: r.color + "88", backgroundColor: r.color + "08" },
+              "&:hover": { borderColor: `${r.color}88`, backgroundColor: `${r.color}08` },
             }}
           >
-            <Checkbox checked={checked} size="small" disableRipple
-              sx={{ p: 0, mt: 0.1, color: r.color, "&.Mui-checked": { color: r.color } }} />
+            <Checkbox
+              checked={checked}
+              size="small"
+              disableRipple
+              sx={{ p: 0, mt: 0.1, color: r.color, "&.Mui-checked": { color: r.color } }}
+            />
             <Box sx={{ flex: 1 }}>
               <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
-                <Typography variant="body2" sx={{ fontWeight: 600, color: checked ? r.color : "text.primary", lineHeight: 1.3 }}>
+                <Typography
+                  variant="body2"
+                  sx={{
+                    fontWeight: 600,
+                    color: checked ? r.color : "text.primary",
+                    lineHeight: 1.3,
+                  }}
+                >
                   {r.label}
                 </Typography>
                 {inherited && (
-                  <Typography variant="caption" sx={{ color: r.color, opacity: 0.7, fontSize: "0.6rem", fontWeight: 500 }}>
+                  <Typography
+                    variant="caption"
+                    sx={{ color: r.color, opacity: 0.7, fontSize: "0.6rem", fontWeight: 500 }}
+                  >
                     inherited
                   </Typography>
                 )}
@@ -281,7 +351,9 @@ export const Users = () => {
         <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
           <PeopleOutlinedIcon sx={{ fontSize: 28, color: "primary.main" }} />
           <Box>
-            <Typography variant="h5" sx={{ fontWeight: 700 }}>Users</Typography>
+            <Typography variant="h5" sx={{ fontWeight: 700 }}>
+              Users
+            </Typography>
             <Typography variant="body2" color="text.secondary">
               {isRoot ? "All users across every team" : "Users in your team"}
             </Typography>
@@ -291,7 +363,12 @@ export const Users = () => {
           <IconButton size="small" onClick={load} disabled={loading}>
             {loading ? <CircularProgress size={16} /> : <RefreshIcon fontSize="small" />}
           </IconButton>
-          <Button variant="contained" startIcon={<PersonAddOutlinedIcon />} size="small" onClick={() => setCreateOpen(true)}>
+          <Button
+            variant="contained"
+            startIcon={<PersonAddOutlinedIcon />}
+            size="small"
+            onClick={() => setCreateOpen(true)}
+          >
             New User
           </Button>
         </Box>
@@ -307,22 +384,46 @@ export const Users = () => {
               onChange={(e) => setSearch(e.target.value)}
               size="small"
               sx={{ flex: 1 }}
-              InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon sx={{ fontSize: 18, color: "text.disabled" }} /></InputAdornment> }}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon sx={{ fontSize: 18, color: "text.disabled" }} />
+                  </InputAdornment>
+                ),
+              }}
             />
             {isRoot && (
               <FormControl size="small" sx={{ minWidth: 160 }}>
                 <InputLabel>Team</InputLabel>
-                <Select value={filterTeam} label="Team" onChange={(e: SelectChangeEvent<number | "">) => setFilterTeam(e.target.value as number | "")}>
+                <Select
+                  value={filterTeam}
+                  label="Team"
+                  onChange={(e: SelectChangeEvent<number | "">) =>
+                    setFilterTeam(e.target.value as number | "")
+                  }
+                >
                   <MenuItem value="">All teams</MenuItem>
-                  {teams.map((t) => <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>)}
+                  {teams.map((t) => (
+                    <MenuItem key={t.id} value={t.id}>
+                      {t.name}
+                    </MenuItem>
+                  ))}
                 </Select>
               </FormControl>
             )}
             <FormControl size="small" sx={{ minWidth: 140 }}>
               <InputLabel>Role</InputLabel>
-              <Select value={filterRole} label="Role" onChange={(e: SelectChangeEvent) => setFilterRole(e.target.value)}>
+              <Select
+                value={filterRole}
+                label="Role"
+                onChange={(e: SelectChangeEvent) => setFilterRole(e.target.value)}
+              >
                 <MenuItem value="">All roles</MenuItem>
-                {ROLE_OPTIONS.map((r) => <MenuItem key={r.value} value={r.value}>{r.label}</MenuItem>)}
+                {ROLE_OPTIONS.map((r) => (
+                  <MenuItem key={r.value} value={r.value}>
+                    {r.label}
+                  </MenuItem>
+                ))}
               </Select>
             </FormControl>
           </Stack>
@@ -339,7 +440,9 @@ export const Users = () => {
           ) : filtered.length === 0 ? (
             <Box sx={{ textAlign: "center", py: 6 }}>
               <PeopleOutlinedIcon sx={{ fontSize: 40, color: "text.disabled", mb: 1 }} />
-              <Typography color="text.secondary" variant="body2">No users found</Typography>
+              <Typography color="text.secondary" variant="body2">
+                No users found
+              </Typography>
             </Box>
           ) : (
             filtered.map((u, idx) => (
@@ -347,16 +450,22 @@ export const Users = () => {
                 {idx > 0 && <Divider />}
                 <Box
                   sx={{
-                    display: "flex", alignItems: "center", gap: 2,
-                    px: 2.5, py: 1.75,
-                    "&:hover": { backgroundColor: isDark ? "rgba(255,255,255,0.02)" : "rgba(15,23,42,0.02)" },
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 2,
+                    px: 2.5,
+                    py: 1.75,
+                    "&:hover": { backgroundColor: "action.hover" },
                     transition: "background 0.15s ease",
                   }}
                 >
                   {/* Avatar */}
                   <Avatar
                     sx={{
-                      width: 36, height: 36, fontSize: "0.75rem", fontWeight: 700,
+                      width: 36,
+                      height: 36,
+                      fontSize: "0.75rem",
+                      fontWeight: 700,
                       background: `linear-gradient(135deg, ${avatarColor(u.username)}, ${avatarColor(u.username)}99)`,
                       flexShrink: 0,
                     }}
@@ -375,37 +484,77 @@ export const Users = () => {
                   </Box>
 
                   {/* Roles */}
-                  <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, flex: 1, justifyContent: "flex-start" }}>
+                  <Box
+                    sx={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: 0.5,
+                      flex: 1,
+                      justifyContent: "flex-start",
+                    }}
+                  >
                     {(u.roles ?? []).map((r) => (
-                      <Chip key={r} label={roleLabel(r)} size="small" color={roleColor(r)} variant="outlined"
-                        sx={{ height: 20, fontSize: "0.68rem" }} />
+                      <Chip
+                        key={r}
+                        label={roleLabel(r)}
+                        size="small"
+                        color={roleColor(r)}
+                        variant="outlined"
+                        sx={{ height: 20, fontSize: "0.68rem" }}
+                      />
                     ))}
                   </Box>
 
                   {/* Team */}
                   <Box sx={{ minWidth: 120, display: { xs: "none", md: "block" } }}>
                     {u.team_name ? (
-                      <Chip label={u.team_name} size="small" variant="outlined"
-                        sx={{ height: 20, fontSize: "0.68rem", borderColor: "rgba(148,163,184,0.3)" }} />
+                      <Chip
+                        label={u.team_name}
+                        size="small"
+                        variant="outlined"
+                        sx={{
+                          height: 20,
+                          fontSize: "0.68rem",
+                          borderColor: "rgba(148,163,184,0.3)",
+                        }}
+                      />
                     ) : (
-                      <Typography variant="caption" color="text.disabled">No team</Typography>
+                      <Typography variant="caption" color="text.disabled">
+                        No team
+                      </Typography>
                     )}
                   </Box>
 
                   {/* Actions */}
                   <Box sx={{ display: "flex", gap: 0.25, flexShrink: 0 }}>
                     <Tooltip title="Edit roles & team">
-                      <IconButton size="small" onClick={() => openEdit(u)} sx={{ color: "primary.main" }}>
+                      <IconButton
+                        size="small"
+                        onClick={() => openEdit(u)}
+                        sx={{ color: "primary.main" }}
+                      >
                         <EditOutlinedIcon sx={{ fontSize: 17 }} />
                       </IconButton>
                     </Tooltip>
                     <Tooltip title="Reset password">
-                      <IconButton size="small" onClick={() => { setPwUser(u); setNewPw(""); }} sx={{ color: "warning.main" }}>
+                      <IconButton
+                        size="small"
+                        onClick={() => {
+                          setPwUser(u);
+                          setNewPw("");
+                        }}
+                        sx={{ color: "warning.main" }}
+                      >
                         <LockResetOutlinedIcon sx={{ fontSize: 17 }} />
                       </IconButton>
                     </Tooltip>
                     <Tooltip title="Delete user">
-                      <IconButton size="small" onClick={() => void handleDelete(u)} sx={{ color: "error.main" }}>
+                      <IconButton
+                        size="small"
+                        aria-label="Delete user"
+                        onClick={() => setConfirmDelete(u)}
+                        sx={{ color: "error.main" }}
+                      >
                         <DeleteOutlineIcon sx={{ fontSize: 17 }} />
                       </IconButton>
                     </Tooltip>
@@ -423,7 +572,10 @@ export const Users = () => {
         <DialogContent sx={{ pt: "16px !important" }}>
           <Stack spacing={2.5}>
             <Box>
-              <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 500, mb: 1, display: "block" }}>
+              <Typography
+                variant="caption"
+                sx={{ color: "text.secondary", fontWeight: 500, mb: 1, display: "block" }}
+              >
                 Roles — select one or more
               </Typography>
               <RolePicker selected={editRoles} onChange={setEditRoles} />
@@ -434,10 +586,16 @@ export const Users = () => {
                 <Select
                   value={editTeamId}
                   label="Team"
-                  onChange={(e: SelectChangeEvent<number | "">) => setEditTeamId(e.target.value as number | "")}
+                  onChange={(e: SelectChangeEvent<number | "">) =>
+                    setEditTeamId(e.target.value as number | "")
+                  }
                 >
                   <MenuItem value="">— No team —</MenuItem>
-                  {teams.map((t) => <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>)}
+                  {teams.map((t) => (
+                    <MenuItem key={t.id} value={t.id}>
+                      {t.name}
+                    </MenuItem>
+                  ))}
                 </Select>
               </FormControl>
             )}
@@ -457,11 +615,20 @@ export const Users = () => {
         <DialogContent sx={{ pt: "16px !important" }}>
           <TextField
             label="New password"
-            type="password"
+            type={showNewPw ? "text" : "password"}
             value={newPw}
             onChange={(e) => setNewPw(e.target.value)}
             fullWidth
             autoFocus
+            InputProps={{
+              endAdornment: (
+                <InputAdornment position="end">
+                  <IconButton size="small" aria-label="Toggle password visibility" onClick={() => setShowNewPw((v) => !v)}>
+                    {showNewPw ? <VisibilityOffIcon sx={{ fontSize: 18 }} /> : <VisibilityIcon sx={{ fontSize: 18 }} />}
+                  </IconButton>
+                </InputAdornment>
+              ),
+            }}
           />
         </DialogContent>
         <DialogActions>
@@ -477,11 +644,40 @@ export const Users = () => {
         <DialogTitle sx={{ fontWeight: 700 }}>New User</DialogTitle>
         <DialogContent sx={{ pt: "16px !important" }}>
           <Stack spacing={2}>
-            <TextField label="Username" value={newUsername} onChange={(e) => setNewUsername(e.target.value)} fullWidth autoFocus />
-            <TextField label="Password" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} fullWidth />
-            <TextField label="Email (optional)" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} fullWidth />
+            <TextField
+              label="Username"
+              value={newUsername}
+              onChange={(e) => setNewUsername(e.target.value)}
+              fullWidth
+              autoFocus
+            />
+            <TextField
+              label="Password"
+              type={showCreatePw ? "text" : "password"}
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              fullWidth
+              InputProps={{
+                endAdornment: (
+                  <InputAdornment position="end">
+                    <IconButton size="small" aria-label="Toggle password visibility" onClick={() => setShowCreatePw((v) => !v)}>
+                      {showCreatePw ? <VisibilityOffIcon sx={{ fontSize: 18 }} /> : <VisibilityIcon sx={{ fontSize: 18 }} />}
+                    </IconButton>
+                  </InputAdornment>
+                ),
+              }}
+            />
+            <TextField
+              label="Email (optional)"
+              value={newEmail}
+              onChange={(e) => setNewEmail(e.target.value)}
+              fullWidth
+            />
             <Box>
-              <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 500, mb: 1, display: "block" }}>
+              <Typography
+                variant="caption"
+                sx={{ color: "text.secondary", fontWeight: 500, mb: 1, display: "block" }}
+              >
                 Roles — select one or more
               </Typography>
               <RolePicker selected={newRoles} onChange={setNewRoles} />
@@ -491,18 +687,48 @@ export const Users = () => {
               <Select
                 value={newTeamId}
                 label="Team (optional)"
-                onChange={(e: SelectChangeEvent<number | "">) => setNewTeamId(e.target.value as number | "")}
+                onChange={(e: SelectChangeEvent<number | "">) =>
+                  setNewTeamId(e.target.value as number | "")
+                }
               >
                 <MenuItem value="">— No team —</MenuItem>
-                {teams.map((t) => <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>)}
+                {teams.map((t) => (
+                  <MenuItem key={t.id} value={t.id}>
+                    {t.name}
+                  </MenuItem>
+                ))}
               </Select>
             </FormControl>
           </Stack>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setCreateOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleCreate} disabled={!newUsername.trim() || !newPassword}>
+          <Button
+            variant="contained"
+            onClick={handleCreate}
+            disabled={!newUsername.trim() || !newPassword || newRoles.length === 0}
+          >
             Create
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── Delete confirmation dialog ── */}
+      <Dialog open={!!confirmDelete} onClose={() => setConfirmDelete(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700 }}>Delete user?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">
+            Permanently delete <strong>{confirmDelete?.username}</strong>? This cannot be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmDelete(null)}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="error"
+            onClick={() => confirmDelete && void handleDelete(confirmDelete)}
+          >
+            Delete
           </Button>
         </DialogActions>
       </Dialog>
@@ -514,7 +740,12 @@ export const Users = () => {
         onClose={() => setSnack(null)}
         anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
       >
-        <Alert onClose={() => setSnack(null)} severity={snack?.sev ?? "success"} variant="filled" sx={{ width: "100%" }}>
+        <Alert
+          onClose={() => setSnack(null)}
+          severity={snack?.sev ?? "success"}
+          variant="filled"
+          sx={{ width: "100%" }}
+        >
           {snack?.msg}
         </Alert>
       </Snackbar>
