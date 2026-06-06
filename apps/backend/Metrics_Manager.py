@@ -120,19 +120,41 @@ class Metrics_Manager(Zabbix_Base):
             time_till = int(time.time())
             time_from = time_till - minutes * 60
 
-            history = self.zapi.history.get(
-                itemids=[itemid],
-                history=value_type,
-                time_from=time_from,
-                time_till=time_till,
-                output=["clock", "value"],
-                sortfield="clock",
-                sortorder="ASC",
-                limit=min(max(minutes * 60, 500), 3000),
-            )
-            points = [
-                {"clock": int(h["clock"]), "value": float(h["value"])} for h in history
-            ]
+            if minutes > 1440:
+                # Periods longer than 24 h: use hourly trend aggregates.
+                # history.get would cap at a few thousand raw points and miss most
+                # of the range; trend.get returns one avg point per hour — always
+                # accurate and fast.
+                trends = self.zapi.trend.get(
+                    itemids=[itemid],
+                    time_from=time_from,
+                    time_till=time_till,
+                    output=["clock", "value_avg"],
+                    sortfield="clock",
+                    sortorder="ASC",
+                )
+                points = [
+                    {"clock": int(t["clock"]), "value": float(t["value_avg"])}
+                    for t in trends
+                ]
+            else:
+                # Periods ≤ 24 h: raw history.  Fetch DESC (most-recent first) so
+                # the limit always discards the oldest points, never the newest.
+                # Reverse the list before returning so the frontend gets ASC order.
+                history = self.zapi.history.get(
+                    itemids=[itemid],
+                    history=value_type,
+                    time_from=time_from,
+                    time_till=time_till,
+                    output=["clock", "value"],
+                    sortfield="clock",
+                    sortorder="DESC",
+                    limit=5000,
+                )
+                points = [
+                    {"clock": int(h["clock"]), "value": float(h["value"])}
+                    for h in reversed(history)
+                ]
             return {
                 "history": points,
                 "item_name": item["name"],

@@ -8,6 +8,8 @@ export type WidgetConfig = {
   y: number;
   w: number;
   h: number;
+  customTitle?: string;
+  lineColor?: string;
 };
 
 export type MetricWidgetConfig = {
@@ -21,6 +23,8 @@ export type MetricWidgetConfig = {
   y: number;
   w: number;
   h: number;
+  customTitle?: string;
+  lineColor?: string;
 };
 
 export type DashboardLayoutData = {
@@ -143,12 +147,16 @@ export type HostInterface = {
   available: string; // "0"=Unknown "1"=Available "2"=Unavailable
 };
 
+export type HostTag = { tag: string; value: string };
+
 export type Host = {
   hostid: string;
   host: string;
   name?: string;
   status: string;
   interfaces?: HostInterface[];
+  tags?: HostTag[];
+  problem_count?: number;
 };
 
 export type TeamUser = {
@@ -231,6 +239,8 @@ const apiFetch = async <T>(
 export const api = {
   health: () => apiFetch<ApiHealth>("/health"),
   listHosts: () => apiFetch<{ count: number; hosts: Host[] }>("/hosts"),
+  listTemplates: () =>
+    apiFetch<{ templates: Array<{ templateid: string; name: string }> }>("/templates"),
   createHost: (payload: { hostname: string; ip: string; template?: string }) =>
     apiFetch<{ message: string; hostid: string }>("/hosts", {
       method: "POST",

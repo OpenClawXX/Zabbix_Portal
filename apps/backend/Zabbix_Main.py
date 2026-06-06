@@ -151,6 +151,16 @@ class TriggerRequest(BaseModel):
 # ── Routes ────────────────────────────────────────────────────────────
 
 
+def _live_team_id(current_user: dict) -> int | None:
+    """Re-fetch team_id from the DB so stale JWTs (minted before a team change) still work."""
+    try:
+        user_id = int(current_user.get("sub", 0))
+        live = um.get_user_by_id(user_id) if user_id else None
+        return (live.get("team_id") if live else None) or current_user.get("team_id")
+    except Exception:
+        return current_user.get("team_id")
+
+
 @app.get("/health", tags=["Status"], summary="API Health Check")
 def health():
     """Returns whether the API is up and connected to Zabbix."""
@@ -239,11 +249,19 @@ def get_all_hosts(current_user: dict = Depends(get_current_user)):
     roles = current_user.get("roles", [])
     if "root" in roles or "auditor" in roles:
         return {"count": len(all_hosts), "hosts": all_hosts}
-    team_id = current_user.get("team_id")
+    team_id = _live_team_id(current_user)
     if not team_id:
         return {"count": 0, "hosts": []}
+    team_name = um.get_team_name(team_id)
     assigned = um.get_team_hostnames(team_id)
-    hosts = [h for h in all_hosts if h["host"] in assigned]
+    # A host is visible if the DB assignment OR the Zabbix team tag matches
+    def _in_team(h: dict) -> bool:
+        if h["host"] in assigned:
+            return True
+        if team_name:
+            return any(t.get("tag") == "team" and t.get("value") == team_name for t in h.get("tags", []))
+        return False
+    hosts = [h for h in all_hosts if _in_team(h)]
     return {"count": len(hosts), "hosts": hosts}
 
 
@@ -261,6 +279,12 @@ def download_inventory():
     )
 
 
+@app.get("/templates", tags=["Hosts"], summary="List available Zabbix templates")
+def list_templates(current_user: dict = Depends(get_current_user)):
+    """Returns all templates from Zabbix sorted by name."""
+    return {"templates": host_bot.list_templates()}
+
+
 @app.post("/hosts", tags=["Hosts"], summary="Create New Host", status_code=201)
 def create_host(data: HostRequest, current_user: dict = Depends(require_operator)):
     """Creates a new Zabbix host. Auto-assigns to the creator's team if they have one."""
@@ -269,10 +293,11 @@ def create_host(data: HostRequest, current_user: dict = Depends(require_operator
         raise HTTPException(
             status_code=400, detail="Failed to create host. Check logs."
         )
-    team_id = current_user.get("team_id")
+    team_id = _live_team_id(current_user)
     if team_id:
         team_name = um.get_team_name(team_id)
-        um.assign_host(team_id, data.hostname)
+        if not um.assign_host(team_id, data.hostname):
+            print(f"⚠️  assign_host failed for {data.hostname!r} team_id={team_id}")
         if team_name:
             host_bot.tag_host(data.hostname, team_name)
     return {"message": "Host created successfully.", "hostid": result}
@@ -362,12 +387,22 @@ async def bulk_create_hosts(
 def delete_host(hostname: str, current_user: dict = Depends(require_operator)):
     """Deletes a host from Zabbix. team_lead and operator can only delete hosts in their own team."""
     if "root" not in current_user.get("roles", []):
-        team_id = current_user.get("team_id")
-        if not team_id or hostname not in um.get_team_hostnames(team_id):
+        team_id = _live_team_id(current_user)
+        if not team_id:
             raise HTTPException(
                 status_code=403,
                 detail="You can only delete hosts assigned to your own team.",
             )
+        # Check ownership via DB assignment OR Zabbix team tag
+        in_db = hostname in um.get_team_hostnames(team_id)
+        if not in_db:
+            team_name = um.get_team_name(team_id)
+            in_zabbix = team_name and host_bot.get_host_team(hostname) == team_name
+            if not in_zabbix:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You can only delete hosts assigned to your own team.",
+                )
     um.unassign_host(hostname)
     success = host_bot.delete_server(hostname)
     if not success:
@@ -440,22 +475,21 @@ def get_item_history(
         raise HTTPException(
             status_code=400, detail="minutes must be between 1 and 10080"
         )
+    print(f"📊 history request: item={itemid} minutes={minutes}")
     return metrics_bot.get_item_history(itemid, minutes)
 
 
 @app.post("/items", tags=["Items"], summary="Add Monitoring Item", status_code=201)
 def add_item(data: ItemRequest, current_user: dict = Depends(require_operator)):
     """Adds a monitoring item (metric) to an existing host."""
-    team_id = current_user.get("team_id")
+    team_id = _live_team_id(current_user)
     team_name = um.get_team_name(team_id) if team_id else None
-    result = item_bot.add_item(
+    item_id, err = item_bot.add_item(
         data.hostname, data.item_name, data.item_key, data.value_type, team_name or ""
     )
-    if not result:
-        raise HTTPException(
-            status_code=400, detail="Failed to add item. Check host name and key."
-        )
-    return {"message": "Item added successfully.", "itemid": result}
+    if not item_id:
+        raise HTTPException(status_code=400, detail=err or "Failed to add item.")
+    return {"message": "Item added successfully.", "itemid": item_id}
 
 
 @app.post(
@@ -463,7 +497,7 @@ def add_item(data: ItemRequest, current_user: dict = Depends(require_operator)):
 )
 def add_trigger(data: TriggerRequest, current_user: dict = Depends(require_operator)):
     """Adds a trigger to an existing host item."""
-    result = item_bot.add_trigger(
+    trigger_id, err = item_bot.add_trigger(
         hostname=data.hostname,
         item_key=data.item_key,
         trigger_name=data.trigger_name,
@@ -471,12 +505,9 @@ def add_trigger(data: TriggerRequest, current_user: dict = Depends(require_opera
         operator=data.operator or ">",
         priority=data.severity or 3,
     )
-    if not result:
-        raise HTTPException(
-            status_code=400,
-            detail="Failed to add trigger. Check host, item key, operator, and threshold.",
-        )
-    return {"message": "Trigger added successfully.", "triggerid": result}
+    if not trigger_id:
+        raise HTTPException(status_code=400, detail=err or "Failed to add trigger.")
+    return {"message": "Trigger added successfully.", "triggerid": trigger_id}
 
 
 # ── Dashboard routes ──────────────────────────────────────────────────
@@ -554,7 +585,7 @@ def get_dashboard_layout(
     current_user: dict = Depends(get_current_user),
 ):
     if scope == "team":
-        team_id = current_user.get("team_id")
+        team_id = _live_team_id(current_user)
         if not team_id:
             return {"widgets": [], "scope": "team"}
         return {
@@ -574,7 +605,7 @@ def save_dashboard_layout(
     if data.scope not in ("user", "team"):
         raise HTTPException(status_code=400, detail="scope must be 'user' or 'team'")
     if data.scope == "team":
-        team_id = current_user.get("team_id")
+        team_id = _live_team_id(current_user)
         if not team_id:
             raise HTTPException(status_code=400, detail="You are not in a team.")
         if not um.save_dashboard_layout("team", int(team_id), data.widgets, page):
@@ -654,7 +685,7 @@ def teams_overview(current_user: dict = Depends(get_current_user)):
     # root and auditor see all teams; everyone else sees only their own
     roles = current_user.get("roles", [])
     team_filter = (
-        None if ("root" in roles or "auditor" in roles) else current_user.get("team_id")
+        None if ("root" in roles or "auditor" in roles) else _live_team_id(current_user)
     )
     return {"teams": um.get_overview(team_id=team_filter)}
 
@@ -696,7 +727,7 @@ def assign_host(
 ):
     if (
         "root" not in current_user.get("roles", [])
-        and current_user.get("team_id") != team_id
+        and _live_team_id(current_user) != team_id
     ):
         raise HTTPException(
             status_code=403, detail="You can only assign hosts to your own team."
@@ -718,7 +749,7 @@ def unassign_host(
 ):
     if (
         "root" not in current_user.get("roles", [])
-        and current_user.get("team_id") != team_id
+        and _live_team_id(current_user) != team_id
     ):
         raise HTTPException(
             status_code=403, detail="You can only remove hosts from your own team."
@@ -740,7 +771,7 @@ def list_users(current_user: dict = Depends(require_admin)):
     """root sees all users; team_lead sees only users in their own team."""
     if "root" in current_user.get("roles", []):
         return {"users": um.list_users()}
-    team_id = current_user.get("team_id")
+    team_id = _live_team_id(current_user)
     if not team_id:
         return {"users": []}
     return {"users": um.list_users(team_id=team_id)}
@@ -755,7 +786,7 @@ def update_user(
         raise HTTPException(status_code=404, detail="User not found.")
     if "root" not in current_user.get("roles", []) and target.get(
         "team_id"
-    ) != current_user.get("team_id"):
+    ) != _live_team_id(current_user):
         raise HTTPException(
             status_code=403, detail="You can only edit users in your own team."
         )
@@ -776,8 +807,8 @@ def create_user(data: UserRequest, current_user: dict = Depends(require_admin)):
         raise HTTPException(
             status_code=400, detail="Password must be at least 8 characters long."
         )
-    if "root" not in current_user.get("roles", []) and data.team_id != current_user.get(
-        "team_id"
+    if "root" not in current_user.get("roles", []) and data.team_id != _live_team_id(
+        current_user
     ):
         raise HTTPException(
             status_code=403, detail="You can only create users in your own team."
@@ -818,7 +849,7 @@ def change_password(
         raise HTTPException(status_code=404, detail="User not found.")
     if "root" not in current_user.get("roles", []) and target.get(
         "team_id"
-    ) != current_user.get("team_id"):
+    ) != _live_team_id(current_user):
         raise HTTPException(
             status_code=403,
             detail="You can only change passwords for users in your own team.",
@@ -836,7 +867,7 @@ def delete_user(user_id: int, current_user: dict = Depends(require_admin)):
         raise HTTPException(status_code=404, detail="User not found.")
     if "root" not in current_user.get("roles", []) and target.get(
         "team_id"
-    ) != current_user.get("team_id"):
+    ) != _live_team_id(current_user):
         raise HTTPException(
             status_code=403, detail="You can only delete users in your own team."
         )

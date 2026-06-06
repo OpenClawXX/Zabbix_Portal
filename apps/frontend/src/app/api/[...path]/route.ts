@@ -16,12 +16,17 @@ const proxy = async (request: NextRequest, { params }: { params: Promise<{ path:
     }
   });
 
-  const response = await fetch(url, {
-    method: request.method,
-    headers,
-    body: body && body.byteLength > 0 ? body : undefined,
-    cache: "no-store",
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: request.method,
+      headers,
+      body: body && body.byteLength > 0 ? body : undefined,
+      cache: "no-store",
+    });
+  } catch {
+    return NextResponse.json({ detail: "Backend unavailable" }, { status: 503 });
+  }
 
   const responseHeaders = new Headers();
   response.headers.forEach((value, key) => {

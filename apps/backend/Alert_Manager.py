@@ -116,18 +116,25 @@ class Alert_Manager(Zabbix_Base):
     # ── Background checker ────────────────────────────────────────────────
 
     def run_checks(self) -> None:
-        """Evaluate all enabled rules; insert alert_events on ok→firing transitions."""
+        """Evaluate all enabled rules; insert alert_events on ok→firing transitions.
+
+        At most one new firing is allowed per item per cycle, ordered by severity
+        ascending (mildest first).  This prevents a fast-rising metric from
+        triggering every threshold simultaneously — each threshold fires in a
+        separate cycle, giving operators time to react before the next escalation.
+        """
         if not self.zapi:
             return
 
         conn = get_conn()
         try:
-            # Phase 1: read rules
+            # Phase 1: read rules — sort by severity ASC so mildest fires first
             with conn.cursor() as cur:
                 cur.execute(
                     """SELECT id, user_id, item_id, item_name, hostname,
                               operator, threshold, severity, is_firing
-                       FROM alert_rules WHERE enabled = TRUE"""
+                       FROM alert_rules WHERE enabled = TRUE
+                       ORDER BY severity ASC, threshold ASC"""
                 )
                 rules = [dict(r) for r in cur.fetchall()]
 
@@ -146,7 +153,11 @@ class Alert_Manager(Zabbix_Base):
                 logger.error("Alert checker: failed to fetch items: %r", exc)
                 return
 
-            # Phase 3: evaluate and write updates
+            # Phase 3: evaluate and write updates.
+            # Track which item_ids have already fired a new event this cycle so
+            # that only one threshold escalates per item per check interval.
+            fired_this_cycle: set[str] = set()
+
             for rule in rules:
                 item = value_map.get(rule["item_id"])
                 if not item or not item.get("lastvalue"):
@@ -168,6 +179,11 @@ class Alert_Manager(Zabbix_Base):
 
                 with conn.cursor() as cur:
                     if firing and not rule["is_firing"]:
+                        if rule["item_id"] in fired_this_cycle:
+                            # Another rule for this item already fired this cycle;
+                            # leave is_firing=False so this rule fires next cycle.
+                            continue
+                        fired_this_cycle.add(rule["item_id"])
                         cur.execute(
                             """INSERT INTO alert_events
                                    (rule_id, user_id, item_name, hostname,

@@ -24,12 +24,21 @@ class Zabbix_Base:
         if url and not url.rstrip("/").endswith("api_jsonrpc.php"):
             url = self._resolve_api_url(url)
 
+        self._zabbix_version: tuple[int, int] = (5, 4)  # fallback; updated after login
         try:
             # zabbix_utils performs login during construction when creds are provided.
             self.zapi = ZabbixAPI(
                 url=url, user=user, password=password, skip_version_check=True
             )
             logger.info("Successfully connected to Zabbix API.")
+            # Detect server version so callers can choose the right API syntax
+            try:
+                ver = str(self.zapi.apiinfo.version())
+                parts = [int(x) for x in ver.split(".")[:2]]
+                self._zabbix_version = (parts[0], parts[1])
+                logger.info("Zabbix API version: %s (parsed %s)", ver, self._zabbix_version)
+            except Exception as ve:
+                logger.warning("Could not detect Zabbix version: %r — defaulting to 5.4 syntax", ve)
         except Exception as e:
             logger.error("Zabbix connection failed: %r", e)
             self.zapi = None

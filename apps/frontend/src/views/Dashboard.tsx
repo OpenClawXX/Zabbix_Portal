@@ -10,11 +10,13 @@ import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import SaveIcon from "@mui/icons-material/Save";
 import ShowChartOutlinedIcon from "@mui/icons-material/ShowChart";
+import TuneIcon from "@mui/icons-material/Tune";
 import {
   Box,
   Button,
   Chip,
   Dialog,
+  DialogActions,
   DialogContent,
   DialogTitle,
   Divider,
@@ -31,6 +33,7 @@ import {
   Paper,
   Select,
   Skeleton,
+  Stack,
   Tab,
   Table,
   TableBody,
@@ -55,10 +58,12 @@ import {
   PointElement,
   Title,
 } from "chart.js";
-import { useCallback, useEffect, useState } from "react";
+import ZoomPlugin from "chartjs-plugin-zoom";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Line } from "react-chartjs-2";
 import ReactGridLayout, { WidthProvider } from "react-grid-layout";
 import {
+  type AlertEvent,
   type DashboardGraph,
   type GraphData,
   type Host,
@@ -80,6 +85,7 @@ ChartJS.register(
   ChartTooltip,
   Legend,
   Filler,
+  ZoomPlugin,
 );
 
 // ── Constants ────────────────────────────────────────────────────────
@@ -116,6 +122,30 @@ const CHART_COLORS = [
   "#54B399",
   "#D36086",
 ];
+
+const PRESET_COLORS = [
+  "#1BA7F5", "#00BFB3", "#F77B00", "#9170B8",
+  "#E7664C", "#22C55E", "#F44336", "#FFC107",
+  "#8B5CF6", "#D36086", "#54B399", "#D6BF57",
+];
+
+const ALERT_SEV_COLORS: Record<number, string> = {
+  5: "#B71C1C",
+  4: "#F44336",
+  3: "#FF5722",
+  2: "#FFC107",
+  1: "#2196F3",
+  0: "#9E9E9E",
+};
+
+const ALERT_SEV_LABELS: Record<number, string> = {
+  5: "Critical",
+  4: "High",
+  3: "Medium",
+  2: "Low",
+  1: "Info",
+  0: "None",
+};
 
 type GradientCtx = {
   chart: { ctx: CanvasRenderingContext2D; chartArea?: { top: number; bottom: number } };
@@ -204,7 +234,19 @@ const MetricBar = ({ value, label }: { value?: number; label: string }) => {
 };
 
 // Renders a Chart.js line chart from graph history data
-const ChartJsGraph = ({ graphid, minutes }: { graphid: string; minutes: number }) => {
+const ChartJsGraph = ({
+  graphid,
+  minutes,
+  alertEvents = [],
+  lineColor,
+  onPeriodChange,
+}: {
+  graphid: string;
+  minutes: number;
+  alertEvents?: AlertEvent[];
+  lineColor?: string;
+  onPeriodChange?: (delta: number) => void;
+}) => {
   const { palette } = useTheme();
   const isDark = palette.mode === "dark";
   const chartBg = isDark ? "#0D1B2A" : "#F1F5F9";
@@ -217,6 +259,10 @@ const ChartJsGraph = ({ graphid, minutes }: { graphid: string; minutes: number }
   const tooltipTitle = isDark ? "#94A3B8" : "#64748B";
   const tooltipBody = isDark ? "#F1F5F9" : "#1E293B";
 
+  // biome-ignore lint/suspicious/noExplicitAny: chartjs-plugin-zoom resetZoom ref
+  const chartRef = useRef<any>(null);
+
+  const prevGraphIdRef = useRef<string>("");
   const [data, setData] = useState<GraphData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -224,39 +270,43 @@ const ChartJsGraph = ({ graphid, minutes }: { graphid: string; minutes: number }
 
   useEffect(() => {
     let cancelled = false;
+    // Only show the full skeleton when the graph itself changes (different widget).
+    // A period/minutes change keeps the existing chart and refreshes in the background.
+    const isNewGraph = prevGraphIdRef.current !== graphid;
+    prevGraphIdRef.current = graphid;
 
-    const doFetch = (isInitial: boolean) => {
-      if (isInitial) {
-        setLoading(true);
-        setError(false);
-        setData(null);
-      } else {
-        setRefreshing(true);
-      }
+    if (isNewGraph) {
+      setLoading(true);
+      setError(false);
+      setData(null);
+      setRefreshing(false);
+    } else {
+      setRefreshing(true);
+    }
+
+    api
+      .getDashboardGraphData(graphid, minutes)
+      .then((res) => {
+        if (!cancelled) {
+          setData(res);
+          setLoading(false);
+          setRefreshing(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          if (isNewGraph) { setError(true); setLoading(false); }
+          else setRefreshing(false);
+        }
+      });
+
+    const timer = setInterval(() => {
+      setRefreshing(true);
       api
         .getDashboardGraphData(graphid, minutes)
-        .then((res) => {
-          if (!cancelled) {
-            setData(res);
-            if (isInitial) setLoading(false);
-            else setRefreshing(false);
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
-            if (isInitial) {
-              setError(true);
-              setLoading(false);
-            } else setRefreshing(false);
-          }
-        });
-    };
-
-    doFetch(true);
-
-    const intervalMs =
-      minutes <= 1 ? 5_000 : minutes <= 5 ? 10_000 : minutes <= 30 ? 30_000 : 60_000;
-    const timer = setInterval(() => doFetch(false), intervalMs);
+        .then((res) => { if (!cancelled) { setData(res); setRefreshing(false); } })
+        .catch(() => { if (!cancelled) setRefreshing(false); });
+    }, 30_000);
 
     return () => {
       cancelled = true;
@@ -264,30 +314,65 @@ const ChartJsGraph = ({ graphid, minutes }: { graphid: string; minutes: number }
     };
   }, [graphid, minutes]);
 
+  // Reset visual zoom whenever the period selector changes (component stays alive, no remount)
+  useEffect(() => { chartRef.current?.resetZoom(); }, [minutes]);
+
   if (loading)
     return <Skeleton variant="rectangular" width="100%" height="100%" sx={{ borderRadius: 1 }} />;
-  if (error || !data || data.series.length === 0)
+
+  if (error)
+    return (
+      <Box sx={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", border: "1px dashed", borderColor: "divider", borderRadius: 1 }}>
+        <Typography color="text.secondary" variant="body2">Failed to load data</Typography>
+      </Box>
+    );
+
+  const noRecordings = !data || data.series.length === 0 || data.series.every((s) => s.points.length === 0);
+
+  if (noRecordings) {
+    const currentIdx = PERIOD_OPTIONS.findIndex((o) => o.minutes === minutes);
+    const largerOptions = currentIdx >= 0 ? PERIOD_OPTIONS.slice(currentIdx + 1) : [];
     return (
       <Box
         sx={{
           height: "100%",
+          bgcolor: chartBg,
+          borderRadius: 1.5,
           display: "flex",
+          flexDirection: "column",
           alignItems: "center",
           justifyContent: "center",
-          border: "1px dashed",
-          borderColor: "divider",
-          borderRadius: 1,
+          gap: 1.5,
+          p: 3,
         }}
       >
-        <Typography color="text.secondary" variant="body2">
-          {error ? "Failed to load data" : "No numeric data in this range"}
+        <Typography sx={{ fontSize: "0.85rem", fontWeight: 600, color: "text.secondary" }}>
+          No data in the last {PERIOD_OPTIONS[currentIdx]?.label ?? `${minutes} min`}
         </Typography>
+        <Typography sx={{ fontSize: "0.75rem", color: "text.disabled", textAlign: "center", maxWidth: 240 }}>
+          No recordings in this window. Try a wider range to find when data was last collected.
+        </Typography>
+        {largerOptions.length > 0 && onPeriodChange && (
+          <Box sx={{ display: "flex", gap: 0.75, flexWrap: "wrap", justifyContent: "center", mt: 0.5 }}>
+            {largerOptions.map((opt, i) => (
+              <Chip
+                key={opt.label}
+                label={opt.label}
+                size="small"
+                clickable
+                variant="outlined"
+                color="primary"
+                onClick={() => onPeriodChange(i + 1)}
+                sx={{ fontSize: "0.72rem" }}
+              />
+            ))}
+          </Box>
+        )}
       </Box>
     );
-
-  const allClocks = Array.from(
-    new Set(data.series.flatMap((s) => s.points.map((p) => p.clock))),
-  ).sort((a, b) => a - b);
+  }
+  const nowSec = Math.floor(Date.now() / 1000);
+  const rangeFrom = nowSec - minutes * 60;
 
   // Compute per-series stats (last, min, avg, max)
   const seriesStats = data.series.map((s) => {
@@ -311,53 +396,121 @@ const ChartJsGraph = ({ graphid, minutes }: { graphid: string; minutes: number }
 
   const unitsLabel = seriesStats[0]?.units || "";
 
-  const rangeStart = allClocks.length > 0 ? allClocks[0] : null;
-  const rangeEnd = allClocks.length > 0 ? allClocks[allClocks.length - 1] : null;
+  const maxPoints = Math.max(...data.series.map((s) => s.points.length), 0);
+  const sparsePoints = maxPoints <= 20;
 
-  const pointCount = allClocks.length;
-  const sparsePoints = pointCount <= 20;
+  // Map alert events to nearest data point per series using clock proximity.
+  // Clock-keyed so results stay accurate after scale format changes.
+  type DashEventItem = { x: number; y: number; color: string; sevLabel: string; actualValue: number };
+  const eventItems: DashEventItem[] = (() => {
+    if (noRecordings) return [];
+    const clockMap = new Map<number, DashEventItem>();
+    for (const e of alertEvents) {
+      if (!data.series.some((s) => s.itemid === e.item_id)) continue;
+      if (e.fired_at < rangeFrom || e.fired_at > nowSec) continue;
+      const matchingSeries = data.series.find((s) => s.itemid === e.item_id);
+      if (!matchingSeries || matchingSeries.points.length === 0) continue;
+      const nearest = matchingSeries.points.reduce((best, p) =>
+        Math.abs(p.clock - e.fired_at) < Math.abs(best.clock - e.fired_at) ? p : best,
+      );
+      const existing = clockMap.get(nearest.clock);
+      if (!existing || e.severity > (existing as DashEventItem & { severity: number }).severity) {
+        clockMap.set(nearest.clock, {
+          x: e.fired_at,
+          y: nearest.value,
+          color: ALERT_SEV_COLORS[e.severity] ?? "#F44336",
+          sevLabel: ALERT_SEV_LABELS[e.severity] ?? "Alert",
+          actualValue: e.actual_value,
+        });
+      }
+    }
+    return [...clockMap.values()];
+  })();
 
   const chartData = {
-    labels: allClocks.map((c) => formatTimestamp(c, minutes)),
-    datasets: data.series.map((s, idx) => {
-      const color = CHART_COLORS[idx % CHART_COLORS.length];
-      const pointMap = new Map(s.points.map((p) => [p.clock, p.value]));
-      return {
-        label: s.name,
-        data: allClocks.map((c) => pointMap.get(c) ?? null),
-        borderColor: color,
-        backgroundColor: (context: GradientCtx) => {
-          const { ctx: c, chartArea } = context.chart;
-          if (!chartArea) return `${color}30`;
-          const g = c.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
-          g.addColorStop(0, `${color}70`);
-          g.addColorStop(0.55, `${color}25`);
-          g.addColorStop(1, `${color}00`);
-          return g;
-        },
-        borderWidth: sparsePoints ? 2.5 : 2,
-        pointRadius: sparsePoints ? 4 : 0,
-        pointBackgroundColor: color,
-        pointBorderColor: "#fff",
-        pointBorderWidth: sparsePoints ? 1.5 : 0,
-        pointHoverRadius: sparsePoints ? 6 : 5,
-        pointHoverBackgroundColor: color,
-        pointHoverBorderColor: "#fff",
-        pointHoverBorderWidth: 2,
-        tension: 0.3,
-        fill: true,
-        spanGaps: true,
-      };
-    }),
+    datasets: [
+      ...data.series.map((s, idx) => {
+        const color = (idx === 0 && lineColor) ? lineColor : CHART_COLORS[idx % CHART_COLORS.length];
+        const pts = s.points.map((p) => ({ x: p.clock, y: p.value }));
+        return {
+          label: s.name,
+          data: pts,
+          borderColor: color,
+          backgroundColor: (context: GradientCtx) => {
+            const { ctx: c, chartArea } = context.chart;
+            if (!chartArea) return `${color}30`;
+            const g = c.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+            g.addColorStop(0, `${color}70`);
+            g.addColorStop(0.55, `${color}25`);
+            g.addColorStop(1, `${color}00`);
+            return g;
+          },
+          borderWidth: sparsePoints ? 2.5 : 2,
+          pointRadius: sparsePoints ? 4 : 0,
+          pointBackgroundColor: color,
+          pointBorderColor: "#fff",
+          pointBorderWidth: sparsePoints ? 1.5 : 0,
+          pointHoverRadius: sparsePoints ? 6 : 5,
+          pointHoverBackgroundColor: color,
+          pointHoverBorderColor: "#fff",
+          pointHoverBorderWidth: 2,
+          tension: 0.3,
+          fill: true,
+          spanGaps: true,
+        };
+      }),
+      ...(eventItems.length > 0
+        ? [
+            {
+              label: "Alert fired",
+              data: eventItems,
+              borderColor: "transparent",
+              backgroundColor: "transparent",
+              pointStyle: "circle" as const,
+              pointRadius: 8,
+              pointHoverRadius: 10,
+              pointBackgroundColor: eventItems.map((e) => e.color),
+              pointBorderColor: "#fff",
+              pointBorderWidth: 2,
+              showLine: false,
+              fill: false,
+              spanGaps: false,
+            },
+          ]
+        : []),
+    ],
   };
 
   const chartOptions = {
     responsive: true,
     maintainAspectRatio: false,
     animation: { duration: 250 } as const,
-    interaction: { mode: "index" as const, intersect: false },
+    interaction: { mode: "nearest" as const, intersect: false, axis: "x" as const },
     plugins: {
       legend: { display: false },
+      zoom: {
+        zoom: {
+          wheel: { enabled: true },
+          pinch: { enabled: true },
+          mode: "x" as const,
+          onZoomComplete: ({ chart }: { chart: any }) => {
+            if (!onPeriodChange) return;
+            const xScale = chart.scales.x;
+            const visibleMinutes = (xScale.max - xScale.min) / 60;
+            const currentIdx = PERIOD_OPTIONS.findIndex((o) => o.minutes === minutes);
+            let closestIdx = 0;
+            let closestDiff = Number.POSITIVE_INFINITY;
+            PERIOD_OPTIONS.forEach((opt, i) => {
+              const diff = Math.abs(opt.minutes - visibleMinutes);
+              if (diff < closestDiff) { closestDiff = diff; closestIdx = i; }
+            });
+            if (currentIdx !== -1 && closestIdx !== currentIdx) {
+              onPeriodChange(closestIdx - currentIdx);
+            }
+          },
+        },
+        pan: { enabled: true, mode: "x" as const },
+      },
       tooltip: {
         backgroundColor: tooltipBg,
         borderColor: tooltipBorder,
@@ -370,12 +523,10 @@ const ChartJsGraph = ({ graphid, minutes }: { graphid: string; minutes: number }
         cornerRadius: 5,
         displayColors: data.series.length > 1,
         callbacks: {
-          title: (items: { dataIndex: number }[]) => {
-            const idx = items[0]?.dataIndex;
-            if (idx === undefined) return "";
-            const clock = allClocks[idx];
-            if (!clock) return "";
-            const d = new Date(clock * 1000);
+          title: (items: { raw: unknown }[]) => {
+            const raw = items[0]?.raw as { x: number } | undefined;
+            if (!raw) return "";
+            const d = new Date(raw.x * 1000);
             if (minutes >= 1440) {
               return d.toLocaleString("en-US", {
                 month: "short",
@@ -393,9 +544,20 @@ const ChartJsGraph = ({ graphid, minutes }: { graphid: string; minutes: number }
               hour12: false,
             });
           },
-          label: (ctx: { dataset: { label?: string }; parsed: { y: number | null } }) => {
+          label: (ctx: {
+            dataset: { label?: string };
+            datasetIndex: number;
+            raw: unknown;
+            parsed: { y: number | null };
+          }) => {
             const v = ctx.parsed.y;
             if (v === null) return "";
+            if (ctx.datasetIndex === data.series.length) {
+              const raw = ctx.raw as { x: number };
+              const item = eventItems.find((e) => e.x === raw.x);
+              if (!item) return "";
+              return ` ⚠ ${item.sevLabel}: ${fmtVal(item.actualValue, unitsLabel)}`;
+            }
             const label = ctx.dataset.label ? `${ctx.dataset.label}: ` : "";
             return `${label}${fmtVal(v, unitsLabel)}`;
           },
@@ -404,12 +566,16 @@ const ChartJsGraph = ({ graphid, minutes }: { graphid: string; minutes: number }
     },
     scales: {
       x: {
+        type: "linear" as const,
+        min: rangeFrom,
+        max: nowSec,
         ticks: {
           maxTicksLimit: 6,
           color: tickColor,
           font: { size: 10 },
           maxRotation: 0,
           minRotation: 0,
+          callback: (value: string | number) => formatTimestamp(Number(value), minutes),
         },
         grid: { display: false },
         border: { display: false },
@@ -440,6 +606,9 @@ const ChartJsGraph = ({ graphid, minutes }: { graphid: string; minutes: number }
         flexDirection: "column",
         overflow: "hidden",
         position: "relative",
+        // Dim slightly while a background refresh is in flight
+        opacity: refreshing ? 0.72 : 1,
+        transition: "opacity 0.2s ease",
       }}
     >
       {/* Live indicator */}
@@ -466,7 +635,12 @@ const ChartJsGraph = ({ graphid, minutes }: { graphid: string; minutes: number }
       />
       {/* Chart area */}
       <Box sx={{ flex: 1, minHeight: 0, p: "12px 8px 4px 8px" }}>
-        <Line data={chartData} options={chartOptions} />
+        <Line
+          ref={chartRef}
+          data={chartData}
+          options={chartOptions}
+          onDoubleClick={() => chartRef.current?.resetZoom()}
+        />
       </Box>
 
       {/* Stats bar — time range + Last / Min / Avg / Max per series */}
@@ -481,11 +655,9 @@ const ChartJsGraph = ({ graphid, minutes }: { graphid: string; minutes: number }
           gap: 0.5,
         }}
       >
-        {rangeStart && rangeEnd && (
-          <Typography sx={{ fontSize: "0.65rem", color: "text.disabled", letterSpacing: "0.02em" }}>
-            {formatRangeTime(rangeStart)} → {formatRangeTime(rangeEnd)}
-          </Typography>
-        )}
+        <Typography sx={{ fontSize: "0.65rem", color: "text.disabled", letterSpacing: "0.02em" }}>
+          {formatRangeTime(rangeFrom)} → {formatRangeTime(nowSec)}
+        </Typography>
         {data.series.map((s, idx) => {
           const st = seriesStats[idx];
           const color = CHART_COLORS[idx % CHART_COLORS.length];
@@ -737,18 +909,207 @@ const AddGraphDialog = ({
   );
 };
 
+// ── Graph config dialog ───────────────────────────────────────────────
+
+const GraphConfigDialog = ({
+  open,
+  widget,
+  onClose,
+  onSave,
+}: {
+  open: boolean;
+  widget: WidgetConfig;
+  onClose: () => void;
+  onSave: (updates: Partial<WidgetConfig>) => void;
+}) => {
+  const [title, setTitle] = useState(widget.customTitle ?? "");
+  const [lineColor, setLineColor] = useState(widget.lineColor ?? "");
+
+  // Host / graph swap
+  const [hosts, setHosts] = useState<Host[]>([]);
+  const [newHostId, setNewHostId] = useState("");
+  const [newGraphs, setNewGraphs] = useState<DashboardGraph[]>([]);
+  const [graphsLoading, setGraphsLoading] = useState(false);
+  const [newGraphId, setNewGraphId] = useState("");
+
+  useEffect(() => {
+    if (open) {
+      setTitle(widget.customTitle ?? "");
+      setLineColor(widget.lineColor ?? "");
+      setNewHostId("");
+      setNewGraphs([]);
+      setNewGraphId("");
+      api.listHosts().then((r) => setHosts(r.hosts)).catch(() => {});
+    }
+  }, [open, widget.customTitle, widget.lineColor]);
+
+  useEffect(() => {
+    if (!newHostId) { setNewGraphs([]); setNewGraphId(""); return; }
+    setGraphsLoading(true);
+    setNewGraphId("");
+    api.getDashboardGraphs(newHostId)
+      .then((r) => setNewGraphs(r.graphs))
+      .catch(() => setNewGraphs([]))
+      .finally(() => setGraphsLoading(false));
+  }, [newHostId]);
+
+  const handleSave = () => {
+    const updates: Partial<WidgetConfig> = {
+      customTitle: title.trim() || undefined,
+      lineColor: lineColor || undefined,
+    };
+    if (newGraphId) {
+      const g = newGraphs.find((g) => g.graphid === newGraphId);
+      if (g) {
+        updates.graphid = g.graphid;
+        updates.graphName = g.name;
+        // Reset custom title when swapping to a new graph
+        if (!title.trim()) updates.customTitle = undefined;
+      }
+    }
+    onSave(updates);
+    onClose();
+  };
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <Typography fontWeight={700}>Configure Graph</Typography>
+        <IconButton size="small" onClick={onClose}>
+          <CloseIcon fontSize="small" />
+        </IconButton>
+      </DialogTitle>
+      <Divider />
+      <DialogContent>
+        <Stack spacing={2.5} sx={{ pt: 1 }}>
+          <Box>
+            <Typography variant="caption" color="text.disabled" sx={{ display: "block", mb: 0.5 }}>
+              Current graph
+            </Typography>
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+              {widget.customTitle ?? widget.graphName}
+            </Typography>
+          </Box>
+          <TextField
+            size="small"
+            label="Custom title"
+            placeholder={widget.graphName}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            fullWidth
+            helperText="Leave blank to use the graph name"
+          />
+          <Box>
+            <Typography variant="body2" sx={{ mb: 1, color: "text.secondary", fontSize: "0.78rem" }}>
+              Accent color (first series)
+            </Typography>
+            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center" }}>
+              {PRESET_COLORS.map((c) => (
+                <Box
+                  key={c}
+                  onClick={() => setLineColor(lineColor === c ? "" : c)}
+                  sx={{
+                    width: 22,
+                    height: 22,
+                    borderRadius: "50%",
+                    bgcolor: c,
+                    cursor: "pointer",
+                    border: lineColor === c ? "2px solid white" : "2px solid transparent",
+                    outline: lineColor === c ? `2px solid ${c}` : "none",
+                    transition: "transform 0.12s",
+                    "&:hover": { transform: "scale(1.25)" },
+                  }}
+                />
+              ))}
+              {lineColor && (
+                <Typography
+                  variant="caption"
+                  onClick={() => setLineColor("")}
+                  sx={{ color: "text.disabled", cursor: "pointer", "&:hover": { color: "text.primary" } }}
+                >
+                  Reset
+                </Typography>
+              )}
+            </Box>
+          </Box>
+          <Divider />
+          <Box>
+            <Typography variant="body2" sx={{ mb: 1.5, fontWeight: 600, fontSize: "0.8rem" }}>
+              Change host / graph
+            </Typography>
+            <Stack spacing={1.5}>
+              <FormControl size="small" fullWidth>
+                <InputLabel>Host</InputLabel>
+                <Select
+                  label="Host"
+                  value={newHostId}
+                  onChange={(e) => setNewHostId(e.target.value)}
+                >
+                  <MenuItem value="">
+                    <Typography sx={{ color: "text.disabled", fontSize: "0.82rem" }}>
+                      Select a host…
+                    </Typography>
+                  </MenuItem>
+                  {hosts.map((h) => (
+                    <MenuItem key={h.hostid} value={h.hostid}>
+                      {h.host}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              {newHostId && (
+                <FormControl size="small" fullWidth>
+                  <InputLabel>Graph</InputLabel>
+                  <Select
+                    label="Graph"
+                    value={newGraphId}
+                    onChange={(e) => setNewGraphId(e.target.value)}
+                    disabled={graphsLoading}
+                  >
+                    {graphsLoading ? (
+                      <MenuItem value="" disabled>Loading…</MenuItem>
+                    ) : newGraphs.length === 0 ? (
+                      <MenuItem value="" disabled>No graphs found for this host</MenuItem>
+                    ) : (
+                      newGraphs.map((g) => (
+                        <MenuItem key={g.graphid} value={g.graphid}>
+                          {g.name}
+                        </MenuItem>
+                      ))
+                    )}
+                  </Select>
+                </FormControl>
+              )}
+            </Stack>
+          </Box>
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" onClick={handleSave}>
+          Save
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+};
+
 // ── Widget card ───────────────────────────────────────────────────────
 
 const WidgetCard = ({
   widget,
   onRemove,
   onUpdate,
+  alertEvents = [],
 }: {
   widget: WidgetConfig;
   onRemove: () => void;
   onUpdate: (updates: Partial<WidgetConfig>) => void;
+  alertEvents?: AlertEvent[];
 }) => {
   const periodOption = PERIOD_OPTIONS[widget.periodIdx] ?? PERIOD_OPTIONS[5];
+  const [configOpen, setConfigOpen] = useState(false);
+  const displayTitle = widget.customTitle ?? widget.graphName;
 
   return (
     <Paper
@@ -804,9 +1165,9 @@ const WidgetCard = ({
               ml: 0.5,
               letterSpacing: "-0.01em",
             }}
-            title={widget.graphName}
+            title={displayTitle}
           >
-            {widget.graphName}
+            {displayTitle}
           </Typography>
         </Box>
 
@@ -830,6 +1191,15 @@ const WidgetCard = ({
               </MenuItem>
             ))}
           </Select>
+          <Tooltip title="Configure graph">
+            <IconButton
+              size="small"
+              onClick={() => setConfigOpen(true)}
+              sx={{ color: "text.disabled", "&:hover": { color: "primary.light" }, p: 0.3 }}
+            >
+              <TuneIcon sx={{ fontSize: 13 }} />
+            </IconButton>
+          </Tooltip>
           <IconButton
             size="small"
             onClick={onRemove}
@@ -846,11 +1216,25 @@ const WidgetCard = ({
 
       <Box sx={{ flex: 1, minHeight: 0, p: 1.5, overflow: "hidden" }}>
         <ChartJsGraph
-          key={`${widget.graphid}-${periodOption.minutes}`}
+          key={widget.graphid}
           graphid={widget.graphid}
           minutes={periodOption.minutes}
+          alertEvents={alertEvents}
+          lineColor={widget.lineColor}
+          onPeriodChange={(delta) =>
+            onUpdate({
+              periodIdx: Math.max(0, Math.min(PERIOD_OPTIONS.length - 1, widget.periodIdx + delta)),
+            })
+          }
         />
       </Box>
+
+      <GraphConfigDialog
+        open={configOpen}
+        widget={widget}
+        onClose={() => setConfigOpen(false)}
+        onSave={(updates) => onUpdate(updates)}
+      />
     </Paper>
   );
 };
@@ -864,6 +1248,19 @@ const GraphsTab = () => {
   const [addOpen, setAddOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [allAlertEvents, setAllAlertEvents] = useState<AlertEvent[]>([]);
+
+  useEffect(() => {
+    const fetchEvents = () => {
+      api
+        .getAlertEvents(500)
+        .then((r) => setAllAlertEvents(r.events))
+        .catch(() => {});
+    };
+    fetchEvents();
+    const timer = setInterval(fetchEvents, 30_000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     api
@@ -1072,6 +1469,7 @@ const GraphsTab = () => {
                 widget={w}
                 onRemove={() => removeWidget(w.i)}
                 onUpdate={(updates) => updateWidget(w.i, updates)}
+                alertEvents={allAlertEvents}
               />
             </div>
           ))}

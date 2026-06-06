@@ -626,20 +626,31 @@ class ZabbixSync(Zabbix_Base):
             portal_team_map = {t["name"]: t["id"] for t in um.list_teams()}
             zabbix_hosts = self.zapi.host.get(
                 output=["hostid", "host"],
+                selectTags="extend",
                 **{self._select_hg_param: ["groupid", "name"]},
             )
 
-            # Build the set of (hostname, team_name) pairs that Zabbix currently has
+            # Build the set of (hostname, team_name) pairs that Zabbix currently has.
+            # A host counts as "assigned" to a team via either:
+            #   a) Zabbix host group membership (group name matches a portal team)
+            #   b) A "team" tag set by create_host / tag_host
             zabbix_assignments: set[tuple[str, str]] = set()
             for zh in zabbix_hosts:
                 hostname = zh.get("host", "").strip()
                 if not hostname:
                     continue
+                # (a) host group membership
                 for hg in zh.get(self._host_hg_key, []):
                     grp_name = hg.get("name", "").strip()
                     if grp_name in portal_team_map:
                         zabbix_assignments.add((hostname, grp_name))
                         um.assign_host(portal_team_map[grp_name], hostname)
+                # (b) "team" tag — created when a team user adds a host via the portal
+                for tag in zh.get("tags", []):
+                    if tag.get("tag") == "team":
+                        tag_team = tag.get("value", "").strip()
+                        if tag_team in portal_team_map:
+                            zabbix_assignments.add((hostname, tag_team))
 
             # Remove portal assignments that no longer exist in Zabbix
             for team in um.get_overview():
@@ -650,7 +661,7 @@ class ZabbixSync(Zabbix_Base):
                     if (hostname, team_name) not in zabbix_assignments:
                         um.unassign_host(hostname)
                         print(
-                            f"ZabbixSync: removed portal assignment '{hostname}' → '{team_name}' — no longer in Zabbix group."
+                            f"ZabbixSync: removed portal assignment '{hostname}' → '{team_name}' — no longer in Zabbix group or tag."
                         )
         except Exception as exc:
             print(f"ZabbixSync.full_sync: host assignment sync failed: {repr(exc)}")

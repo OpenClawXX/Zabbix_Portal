@@ -81,6 +81,17 @@ class Host_Manager(Zabbix_Base):
         """
         return self.get_template_id_from_name(template_name)
 
+    def list_templates(self) -> list[dict]:
+        """Returns all templates available in Zabbix as [{templateid, name}]."""
+        if not self.zapi:
+            return []
+        try:
+            results = self.zapi.template.get(output=["templateid", "name"], sortfield="name")
+            return [{"templateid": t["templateid"], "name": t["name"]} for t in results]
+        except Exception as e:
+            print(f"❌ Failed to list templates: {e}")
+            return []
+
     # ------------------------------------------------------------------
     # PUBLIC API
     # ------------------------------------------------------------------
@@ -154,10 +165,34 @@ class Host_Manager(Zabbix_Base):
             kwargs: dict = {
                 "output": ["hostid", "host", "name", "status"],
                 "selectInterfaces": ["ip", "port", "type", "available"],
+                "selectTags": "extend",
             }
             if team_name:
                 kwargs["tags"] = [{"tag": "team", "value": team_name, "operator": 1}]
             hosts = self.zapi.host.get(**kwargs)
+
+            # Attach per-host active problem counts (triggers in problem state)
+            if hosts:
+                hostids = [h["hostid"] for h in hosts]
+                try:
+                    problem_triggers = self.zapi.trigger.get(
+                        hostids=hostids,
+                        value=1,
+                        output=["triggerid"],
+                        selectHosts=["hostid"],
+                    )
+                    counts: dict = {}
+                    for t in problem_triggers:
+                        for h in t.get("hosts", []):
+                            hid = h["hostid"]
+                            counts[hid] = counts.get(hid, 0) + 1
+                    for h in hosts:
+                        h["problem_count"] = counts.get(h["hostid"], 0)
+                except Exception as exc:
+                    print(f"⚠️ Could not fetch problem counts: {repr(exc)}")
+                    for h in hosts:
+                        h["problem_count"] = 0
+
             print(f"✅ Retrieved {len(hosts)} hosts.")
             return hosts
         except Exception as e:
@@ -204,6 +239,26 @@ class Host_Manager(Zabbix_Base):
         except Exception as e:
             print(f"❌ Failed to untag host '{hostname}': {repr(e)}")
             return False
+
+    def get_host_team(self, hostname: str) -> str | None:
+        """Returns the value of the 'team' tag on this host, or None if absent."""
+        if not self.zapi:
+            return None
+        try:
+            host_data = self.zapi.host.get(
+                filter={"host": hostname},
+                output=["hostid"],
+                selectTags="extend",
+            )
+            if not host_data:
+                return None
+            for t in host_data[0].get("tags", []):
+                if t.get("tag") == "team":
+                    return t.get("value")
+            return None
+        except Exception as e:
+            print(f"❌ get_host_team failed for '{hostname}': {repr(e)}")
+            return None
 
     def export_hosts_to_excel(self, file_path="zabbix_inventory.xlsx"):
         """Fetches all hosts and writes them to an Excel (.xlsx) file."""

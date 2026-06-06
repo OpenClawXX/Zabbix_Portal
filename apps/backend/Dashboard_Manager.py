@@ -150,16 +150,41 @@ class Dashboard_Manager(Zabbix_Base):
                 vtype = int(item["value_type"])
                 if vtype not in (0, 3):
                     continue
-                history = self.zapi.history.get(
-                    itemids=[gi["itemid"]],
-                    history=vtype,
-                    time_from=time_from,
-                    time_till=time_till,
-                    output=["clock", "value"],
-                    sortfield="clock",
-                    sortorder="ASC",
-                    limit=min(max(minutes * 60, 500), 3000),
-                )
+                try:
+                    if minutes > 1440:
+                        # Long range: hourly trend aggregates are accurate and fast.
+                        raw = self.zapi.trend.get(
+                            itemids=[gi["itemid"]],
+                            time_from=time_from,
+                            time_till=time_till,
+                            output=["clock", "value_avg"],
+                            sortfield="clock",
+                            sortorder="ASC",
+                        )
+                        points = [
+                            {"clock": int(r["clock"]), "value": float(r["value_avg"])}
+                            for r in raw
+                        ]
+                    else:
+                        # Short range: raw history DESC so limit always keeps the
+                        # most recent points; reverse to restore chronological order.
+                        raw = self.zapi.history.get(
+                            itemids=[gi["itemid"]],
+                            history=vtype,
+                            time_from=time_from,
+                            time_till=time_till,
+                            output=["clock", "value"],
+                            sortfield="clock",
+                            sortorder="DESC",
+                            limit=5000,
+                        )
+                        points = [
+                            {"clock": int(r["clock"]), "value": float(r["value"])}
+                            for r in reversed(raw)
+                        ]
+                except Exception as exc:
+                    print(f"❌ history.get failed for item {gi['itemid']}: {repr(exc)}")
+                    continue
                 color = gi.get("color", "3B82F6")
                 if color and not color.startswith("#"):
                     color = f"#{color}"
@@ -169,10 +194,7 @@ class Dashboard_Manager(Zabbix_Base):
                         "name": item["name"],
                         "units": item.get("units", ""),
                         "color": color or "#3B82F6",
-                        "points": [
-                            {"clock": int(h["clock"]), "value": float(h["value"])}
-                            for h in history
-                        ],
+                        "points": points,
                     }
                 )
             return {

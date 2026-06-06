@@ -11,6 +11,7 @@ import NotificationsActiveOutlinedIcon from "@mui/icons-material/NotificationsAc
 import RefreshIcon from "@mui/icons-material/Refresh";
 import SaveIcon from "@mui/icons-material/Save";
 import ShowChartOutlinedIcon from "@mui/icons-material/ShowChartOutlined";
+import TuneIcon from "@mui/icons-material/Tune";
 import WarningAmberOutlinedIcon from "@mui/icons-material/WarningAmberOutlined";
 import {
   Box,
@@ -34,6 +35,7 @@ import {
   Paper,
   Select,
   Skeleton,
+  Stack,
   Switch,
   Tab,
   Table,
@@ -59,7 +61,8 @@ import {
   PointElement,
   Title,
 } from "chart.js";
-import { useCallback, useEffect, useState } from "react";
+import ZoomPlugin from "chartjs-plugin-zoom";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Line } from "react-chartjs-2";
 import ReactGridLayout, { WidthProvider } from "react-grid-layout";
 import {
@@ -83,6 +86,7 @@ ChartJS.register(
   ChartTooltip,
   Legend,
   Filler,
+  ZoomPlugin,
 );
 
 const metricsGlowPlugin = {
@@ -126,6 +130,12 @@ const SEVERITY_CONFIG = [
   { severity: 0, label: "None", color: "#9E9E9E", bg: "rgba(158,158,158,0.12)" },
 ] as const;
 
+const PRESET_COLORS = [
+  "#1BA7F5", "#00BFB3", "#F77B00", "#9170B8",
+  "#E7664C", "#22C55E", "#F44336", "#FFC107",
+  "#8B5CF6", "#D36086", "#54B399", "#D6BF57",
+];
+
 // ── Types ─────────────────────────────────────────────────────────────
 
 type ItemDef = {
@@ -146,12 +156,41 @@ const formatAge = (seconds: number): string => {
   return `${Math.floor(seconds / 86400)}d ${Math.floor((seconds % 86400) / 3600)}h`;
 };
 
-const formatTimestamp = (clock: number): string =>
-  new Date(clock * 1000).toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
+const formatRangeBound = (clock: number, spanMinutes: number): string => {
+  const d = new Date(clock * 1000);
+  if (spanMinutes >= 1440) {
+    return d.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+  }
+  return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+};
+
+const formatTimestamp = (clock: number, minutes?: number): string => {
+  const d = new Date(clock * 1000);
+  if (minutes !== undefined && minutes <= 5) {
+    return d.toLocaleTimeString("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+  }
+  if (minutes !== undefined && minutes >= 1440) {
+    return d.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+  }
+  return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+};
 
 // ── Severity chip ─────────────────────────────────────────────────────
 
@@ -179,10 +218,14 @@ const ItemChart = ({
   itemid,
   minutes,
   alertEvents = [],
+  lineColor = "#1BA7F5",
+  onPeriodChange,
 }: {
   itemid: string;
   minutes: number;
   alertEvents?: import("../app/api").AlertEvent[];
+  lineColor?: string;
+  onPeriodChange?: (delta: number) => void;
 }) => {
   const { palette } = useTheme();
   const isDark = palette.mode === "dark";
@@ -192,44 +235,52 @@ const ItemChart = ({
   // pale chart background; dark mode needs a light-enough slate for contrast.
   const tickColor = isDark ? "#94A3B8" : "#334155";
 
+  // biome-ignore lint/suspicious/noExplicitAny: chartjs-plugin-zoom resetZoom ref
+  const chartRef = useRef<any>(null);
+
+  const prevItemIdRef = useRef<string>("");
   const [data, setData] = useState<ItemHistory | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    // Only show the full skeleton when the item itself changes (different metric).
+    // A period/minutes change keeps the existing chart and refreshes in the background.
+    const isNewItem = prevItemIdRef.current !== itemid;
+    prevItemIdRef.current = itemid;
 
-    const doFetch = (isInitial: boolean) => {
-      if (isInitial) {
-        setLoading(true);
-        setData(null);
-      } else {
-        setRefreshing(true);
-      }
+    if (isNewItem) {
+      setLoading(true);
+      setData(null);
+      setRefreshing(false);
+    } else {
+      setRefreshing(true);
+    }
+
+    api
+      .getItemHistory(itemid, minutes)
+      .then((res) => {
+        if (!cancelled) {
+          setData(res);
+          setLoading(false);
+          setRefreshing(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          if (isNewItem) { setData(null); setLoading(false); }
+          else setRefreshing(false);
+        }
+      });
+
+    const timer = setInterval(() => {
+      setRefreshing(true);
       api
         .getItemHistory(itemid, minutes)
-        .then((res) => {
-          if (!cancelled) {
-            setData(res);
-            if (isInitial) setLoading(false);
-            else setRefreshing(false);
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
-            if (isInitial) {
-              setData(null);
-              setLoading(false);
-            } else setRefreshing(false);
-          }
-        });
-    };
-
-    doFetch(true);
-
-    const intervalMs =
-      minutes <= 1 ? 5_000 : minutes <= 5 ? 10_000 : minutes <= 30 ? 30_000 : 60_000;
-    const timer = setInterval(() => doFetch(false), intervalMs);
+        .then((res) => { if (!cancelled) { setData(res); setRefreshing(false); } })
+        .catch(() => { if (!cancelled) setRefreshing(false); });
+    }, 30_000);
 
     return () => {
       cancelled = true;
@@ -237,113 +288,134 @@ const ItemChart = ({
     };
   }, [itemid, minutes]);
 
+  // Reset visual zoom whenever the period selector changes (component stays alive, no remount)
+  useEffect(() => { chartRef.current?.resetZoom(); }, [minutes]);
+
   if (loading)
     return <Skeleton variant="rectangular" width="100%" height={180} sx={{ borderRadius: 1 }} />;
 
-  if (!data || data.history.length === 0)
+  const noRecordings = !data || data.history.length === 0;
+  const nowSec = Math.floor(Date.now() / 1000);
+  const rangeFrom = nowSec - minutes * 60;
+
+  if (noRecordings) {
+    const currentIdx = PERIOD_OPTIONS.findIndex((o) => o.minutes === minutes);
+    const largerOptions = currentIdx >= 0 ? PERIOD_OPTIONS.slice(currentIdx + 1) : [];
     return (
       <Box
         sx={{
-          height: 180,
+          height: "100%",
+          minHeight: 180,
+          bgcolor: chartBg,
+          borderRadius: 1.5,
           display: "flex",
+          flexDirection: "column",
           alignItems: "center",
           justifyContent: "center",
-          border: "1px dashed",
-          borderColor: "divider",
-          borderRadius: 1,
+          gap: 1.5,
+          p: 3,
+          position: "relative",
         }}
       >
-        <Typography color="text.secondary" variant="body2">
-          No data in this range
+        <Typography sx={{ fontSize: "0.85rem", fontWeight: 600, color: "text.secondary" }}>
+          No data in the last {PERIOD_OPTIONS[currentIdx]?.label ?? `${minutes} min`}
         </Typography>
+        <Typography sx={{ fontSize: "0.75rem", color: "text.disabled", textAlign: "center", maxWidth: 260 }}>
+          This metric has no recordings in this window. Try a wider range to find when data was last collected.
+        </Typography>
+        {largerOptions.length > 0 && onPeriodChange && (
+          <Box sx={{ display: "flex", gap: 0.75, flexWrap: "wrap", justifyContent: "center", mt: 0.5 }}>
+            {largerOptions.map((opt, i) => (
+              <Chip
+                key={opt.label}
+                label={opt.label}
+                size="small"
+                clickable
+                variant="outlined"
+                color="primary"
+                onClick={() => onPeriodChange(i + 1)}
+                sx={{ fontSize: "0.72rem" }}
+              />
+            ))}
+          </Box>
+        )}
       </Box>
     );
+  }
 
-  const labels = data.history.map((p) => formatTimestamp(p.clock));
-  const values = data.history.map((p) => p.value);
-  const sparsePoints = data.history.length <= 20;
+  const historyPoints = data.history;
 
-  // Map each alert event to the nearest history sample using true nearest-neighbour
-  // (no distance cutoff — any event inside the chart's time range gets shown).
-  // If multiple events land on the same sample, keep the most severe one.
-  const relevantEvents = alertEvents.filter(
-    (e) =>
-      e.fired_at >= data.history[0].clock &&
-      e.fired_at <= data.history[data.history.length - 1].clock,
-  );
-  const indexToEvent = new Map<number, import("../app/api").AlertEvent>();
-  relevantEvents.forEach((e) => {
-    let nearestIdx = 0;
-    let nearestDist = Math.abs(e.fired_at - data.history[0].clock);
-    for (let i = 1; i < data.history.length; i++) {
-      const dist = Math.abs(e.fired_at - data.history[i].clock);
-      if (dist < nearestDist) {
-        nearestDist = dist;
-        nearestIdx = i;
+  const sparsePoints = !noRecordings && data.history.length <= 20;
+
+  // Map each alert event to its nearest real data point (clock-keyed so we
+  // stay accurate after padding / format changes).  Keep the most severe event
+  // per clock position.
+  type EventItem = { firedAt: number; y: number; color: string; sevLabel: string; actualValue: number; severity: number };
+  const eventItems: EventItem[] = [];
+  if (!noRecordings) {
+    const clockMap = new Map<number, EventItem>();
+    for (const e of alertEvents) {
+      if (e.fired_at < rangeFrom || e.fired_at > nowSec) continue;
+      const nearest = data.history.reduce((best, p) =>
+        Math.abs(p.clock - e.fired_at) < Math.abs(best.clock - e.fired_at) ? p : best,
+      );
+      const existing = clockMap.get(nearest.clock);
+      if (!existing || e.severity > existing.severity) {
+        clockMap.set(nearest.clock, {
+          firedAt: e.fired_at,
+          y: nearest.value,
+          color: SEVERITY_CONFIG.find((s) => s.severity === e.severity)?.color ?? "#F44336",
+          sevLabel: SEVERITY_CONFIG.find((s) => s.severity === e.severity)?.label ?? "Alert",
+          actualValue: e.actual_value,
+          severity: e.severity,
+        });
       }
     }
-    const existing = indexToEvent.get(nearestIdx);
-    if (!existing || e.severity > existing.severity) {
-      indexToEvent.set(nearestIdx, e);
-    }
-  });
-
-  // Marker Y sits on the line (history value) so the dot is always visible.
-  // Color is driven by severity so you can tell at a glance how bad it was.
-  const alertMarkers: (number | null)[] = data.history.map((p, idx) =>
-    indexToEvent.has(idx) ? p.value : null,
-  );
-  const markerColors = data.history.map((_, idx) => {
-    const e = indexToEvent.get(idx);
-    if (!e) return "transparent";
-    return SEVERITY_CONFIG.find((s) => s.severity === e.severity)?.color ?? "#F44336";
-  });
-  const hasMarkers = alertMarkers.some((v) => v !== null);
+    eventItems.push(...clockMap.values());
+  }
 
   const chartData = {
-    labels,
     datasets: [
       {
-        label: data.item_name,
-        data: values,
-        borderColor: "#1BA7F5",
+        label: data?.item_name ?? "",
+        data: historyPoints.map((p) => ({ x: p.clock, y: p.value })),
+        borderColor: lineColor,
         backgroundColor: (context: {
           chart: { ctx: CanvasRenderingContext2D; chartArea?: { top: number; bottom: number } };
         }) => {
           const { ctx: c, chartArea } = context.chart;
-          if (!chartArea) return "rgba(27,167,245,0.15)";
+          if (!chartArea) return `${lineColor}26`;
           const g = c.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
-          g.addColorStop(0, "rgba(27,167,245,0.4)");
-          g.addColorStop(0.5, "rgba(27,167,245,0.1)");
-          g.addColorStop(1, "rgba(27,167,245,0)");
+          g.addColorStop(0, `${lineColor}66`);
+          g.addColorStop(0.5, `${lineColor}1A`);
+          g.addColorStop(1, `${lineColor}00`);
           return g;
         },
         borderWidth: sparsePoints ? 2.5 : 2,
         pointRadius: sparsePoints ? 4 : 0,
-        pointBackgroundColor: "#1BA7F5",
+        pointBackgroundColor: lineColor,
         pointBorderColor: "#fff",
         pointBorderWidth: sparsePoints ? 1.5 : 0,
         pointHoverRadius: sparsePoints ? 6 : 5,
-        pointHoverBackgroundColor: "#1BA7F5",
+        pointHoverBackgroundColor: lineColor,
         pointHoverBorderColor: "#fff",
         pointHoverBorderWidth: 2,
         tension: 0.35,
         fill: true,
         spanGaps: true,
       },
-      // Alert event markers — solid circles on the line, coloured by severity
-      ...(hasMarkers
+      ...(eventItems.length > 0
         ? [
             {
               label: "Alert fired",
-              data: alertMarkers,
+              data: eventItems.map((e) => ({ x: e.firedAt, y: e.y })),
               borderColor: "transparent",
               backgroundColor: "transparent",
               pointStyle: "circle" as const,
-              pointRadius: alertMarkers.map((v) => (v !== null ? 8 : 0)),
-              pointHoverRadius: alertMarkers.map((v) => (v !== null ? 10 : 0)),
-              pointBackgroundColor: markerColors,
-              pointBorderColor: alertMarkers.map((v) => (v !== null ? "#fff" : "transparent")),
+              pointRadius: 8,
+              pointHoverRadius: 10,
+              pointBackgroundColor: eventItems.map((e) => e.color),
+              pointBorderColor: "#fff",
               pointBorderWidth: 2,
               showLine: false,
               fill: false,
@@ -358,9 +430,32 @@ const ItemChart = ({
     responsive: true,
     maintainAspectRatio: false,
     animation: { duration: 250 } as const,
-    interaction: { mode: "index" as const, intersect: false },
+    interaction: { mode: "nearest" as const, intersect: false, axis: "x" as const },
     plugins: {
       legend: { display: false },
+      zoom: {
+        zoom: {
+          wheel: { enabled: true },
+          pinch: { enabled: true },
+          mode: "x" as const,
+          onZoomComplete: ({ chart }: { chart: any }) => {
+            if (!onPeriodChange) return;
+            const xScale = chart.scales.x;
+            const visibleMinutes = (xScale.max - xScale.min) / 60;
+            const currentIdx = PERIOD_OPTIONS.findIndex((o) => o.minutes === minutes);
+            let closestIdx = 0;
+            let closestDiff = Number.POSITIVE_INFINITY;
+            PERIOD_OPTIONS.forEach((opt, i) => {
+              const diff = Math.abs(opt.minutes - visibleMinutes);
+              if (diff < closestDiff) { closestDiff = diff; closestIdx = i; }
+            });
+            if (currentIdx !== -1 && closestIdx !== currentIdx) {
+              onPeriodChange(closestIdx - currentIdx);
+            }
+          },
+        },
+        pan: { enabled: true, mode: "x" as const },
+      },
       tooltip: {
         backgroundColor: isDark ? "rgba(5,15,30,0.97)" : "rgba(255,255,255,0.97)",
         borderColor: isDark ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.15)",
@@ -370,42 +465,41 @@ const ItemChart = ({
         bodyColor: isDark ? "#F1F5F9" : "#1E293B",
         cornerRadius: 6,
         callbacks: {
-          title: (items: { dataIndex: number }[]) => {
-            const idx = items[0]?.dataIndex;
-            if (idx === undefined) return "";
-            // Show the exact alert fired_at time when a marker is present at this index
-            const event = indexToEvent.get(idx);
-            const clock = event ? event.fired_at : data.history[idx]?.clock;
-            if (!clock) return "";
-            return new Date(clock * 1000).toLocaleTimeString("en-US", {
+          title: (items: { raw: unknown }[]) => {
+            const raw = items[0]?.raw as { x: number } | undefined;
+            if (!raw) return "";
+            return new Date(raw.x * 1000).toLocaleTimeString("en-US", {
               hour: "2-digit",
               minute: "2-digit",
               second: "2-digit",
               hour12: false,
             });
           },
-          label: (ctx: { datasetIndex: number; dataIndex: number; parsed: { y: number | null } }) => {
+          label: (ctx: { datasetIndex: number; raw: unknown; parsed: { y: number | null } }) => {
             if (ctx.parsed.y == null) return "";
             if (ctx.datasetIndex === 1) {
-              const e = indexToEvent.get(ctx.dataIndex);
-              if (!e) return "";
-              const sevLabel =
-                SEVERITY_CONFIG.find((s) => s.severity === e.severity)?.label ?? "Alert";
-              return ` ⚠ ${sevLabel}: ${e.actual_value}${data.units && data.units !== "%" ? ` ${data.units}` : ""}`;
+              const raw = ctx.raw as { x: number };
+              const item = eventItems.find((e) => e.firedAt === raw.x);
+              if (!item) return "";
+              return ` ⚠ ${item.sevLabel}: ${item.actualValue}${data?.units && data.units !== "%" ? ` ${data.units}` : ""}`;
             }
-            return ` ${ctx.parsed.y}${data.units && data.units !== "%" ? ` ${data.units}` : ""}`;
+            return ` ${ctx.parsed.y}${data?.units && data.units !== "%" ? ` ${data.units}` : ""}`;
           },
         },
       },
     },
     scales: {
       x: {
+        type: "linear" as const,
+        min: rangeFrom,
+        max: nowSec,
         ticks: {
           maxTicksLimit: 5,
           color: tickColor,
           font: { size: 10 },
           maxRotation: 0,
           minRotation: 0,
+          callback: (value: string | number) => formatTimestamp(Number(value), minutes),
         },
         grid: { color: gridColor, drawTicks: false },
         border: { display: false },
@@ -424,12 +518,34 @@ const ItemChart = ({
         height: "100%",
         minHeight: 180,
         bgcolor: chartBg,
+        // Dim slightly while a background refresh is in flight
+        opacity: refreshing ? 0.72 : 1,
+        transition: "opacity 0.2s ease",
         borderRadius: 1.5,
         p: "14px 10px 8px 10px",
         boxSizing: "border-box",
         position: "relative",
       }}
     >
+      {/* Time range label — always visible so the user can confirm the filter changed */}
+      <Typography
+        variant="caption"
+        sx={{
+          position: "absolute",
+          top: 7,
+          left: 10,
+          fontSize: "0.58rem",
+          color: tickColor,
+          opacity: 0.65,
+          zIndex: 1,
+          letterSpacing: 0,
+          userSelect: "none",
+        }}
+      >
+        {formatRangeBound(rangeFrom, minutes)}
+        {" → "}
+        {formatRangeBound(nowSec, minutes)}
+      </Typography>
       {/* Live indicator */}
       <Box
         sx={{
@@ -452,7 +568,13 @@ const ItemChart = ({
           }),
         }}
       />
-      <Line data={chartData} options={chartOptions} plugins={[metricsGlowPlugin]} />
+      <Line
+        ref={chartRef}
+        data={chartData}
+        options={chartOptions}
+        plugins={[metricsGlowPlugin]}
+        onDoubleClick={() => chartRef.current?.resetZoom()}
+      />
     </Box>
   );
 };
@@ -608,6 +730,208 @@ const AddMetricDialog = ({
   );
 };
 
+// ── Metric config dialog ──────────────────────────────────────────────
+
+const MetricConfigDialog = ({
+  open,
+  widget,
+  onClose,
+  onSave,
+}: {
+  open: boolean;
+  widget: MetricWidgetConfig;
+  onClose: () => void;
+  onSave: (updates: Partial<MetricWidgetConfig>) => void;
+}) => {
+  const [title, setTitle] = useState(widget.customTitle ?? "");
+  const [lineColor, setLineColor] = useState(widget.lineColor ?? "");
+
+  // Host / item swap
+  const [hosts, setHosts] = useState<Host[]>([]);
+  const [newHostname, setNewHostname] = useState("");
+  const [newItems, setNewItems] = useState<{ itemid: string; name: string; key_: string }[]>([]);
+  const [itemsLoading, setItemsLoading] = useState(false);
+  const [newItemId, setNewItemId] = useState("");
+
+  useEffect(() => {
+    if (open) {
+      setTitle(widget.customTitle ?? "");
+      setLineColor(widget.lineColor ?? "");
+      setNewHostname("");
+      setNewItems([]);
+      setNewItemId("");
+      api.listHosts().then((r) => setHosts(r.hosts)).catch(() => {});
+    }
+  }, [open, widget.customTitle, widget.lineColor]);
+
+  useEffect(() => {
+    if (!newHostname) { setNewItems([]); setNewItemId(""); return; }
+    setItemsLoading(true);
+    setNewItemId("");
+    api.listItems(newHostname)
+      .then((r) => setNewItems(r.items.filter((i) => i.value_type === "0" || i.value_type === "3")))
+      .catch(() => setNewItems([]))
+      .finally(() => setItemsLoading(false));
+  }, [newHostname]);
+
+  const handleSave = () => {
+    const updates: Partial<MetricWidgetConfig> = {
+      customTitle: title.trim() || undefined,
+      lineColor: lineColor || undefined,
+    };
+    if (newItemId && newHostname) {
+      const item = newItems.find((i) => i.itemid === newItemId);
+      if (item) {
+        updates.itemid = item.itemid;
+        updates.itemName = item.name;
+        updates.hostname = newHostname;
+        if (!title.trim()) updates.customTitle = undefined;
+      }
+    }
+    onSave(updates);
+    onClose();
+  };
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <Typography fontWeight={700}>Configure Metric</Typography>
+        <IconButton size="small" onClick={onClose}>
+          <CloseIcon fontSize="small" />
+        </IconButton>
+      </DialogTitle>
+      <Divider />
+      <DialogContent>
+        <Stack spacing={2.5} sx={{ pt: 1 }}>
+          <Box sx={{ display: "flex", gap: 2 }}>
+            <Box>
+              <Typography variant="caption" color="text.disabled" sx={{ display: "block", mb: 0.25 }}>
+                Host
+              </Typography>
+              <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                {widget.hostname}
+              </Typography>
+            </Box>
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography variant="caption" color="text.disabled" sx={{ display: "block", mb: 0.25 }}>
+                Item
+              </Typography>
+              <Typography variant="body2" sx={{ fontWeight: 500 }} noWrap>
+                {widget.customTitle ?? widget.itemName}
+              </Typography>
+            </Box>
+          </Box>
+          <TextField
+            size="small"
+            label="Custom title"
+            placeholder={widget.itemName}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            fullWidth
+            helperText="Leave blank to use the item name"
+          />
+          <Box>
+            <Typography variant="body2" sx={{ mb: 1, color: "text.secondary", fontSize: "0.78rem" }}>
+              Line color
+            </Typography>
+            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center" }}>
+              {PRESET_COLORS.map((c) => (
+                <Box
+                  key={c}
+                  onClick={() => setLineColor(lineColor === c ? "" : c)}
+                  sx={{
+                    width: 22,
+                    height: 22,
+                    borderRadius: "50%",
+                    bgcolor: c,
+                    cursor: "pointer",
+                    border: lineColor === c ? "2px solid white" : "2px solid transparent",
+                    outline: lineColor === c ? `2px solid ${c}` : "none",
+                    transition: "transform 0.12s",
+                    "&:hover": { transform: "scale(1.25)" },
+                  }}
+                />
+              ))}
+              {lineColor && (
+                <Typography
+                  variant="caption"
+                  onClick={() => setLineColor("")}
+                  sx={{ color: "text.disabled", cursor: "pointer", "&:hover": { color: "text.primary" } }}
+                >
+                  Reset
+                </Typography>
+              )}
+            </Box>
+          </Box>
+          <Divider />
+          <Box>
+            <Typography variant="body2" sx={{ mb: 1.5, fontWeight: 600, fontSize: "0.8rem" }}>
+              Change host / item
+            </Typography>
+            <Stack spacing={1.5}>
+              <FormControl size="small" fullWidth>
+                <InputLabel>Host</InputLabel>
+                <Select
+                  label="Host"
+                  value={newHostname}
+                  onChange={(e) => setNewHostname(e.target.value)}
+                >
+                  <MenuItem value="">
+                    <Typography sx={{ color: "text.disabled", fontSize: "0.82rem" }}>
+                      Select a host…
+                    </Typography>
+                  </MenuItem>
+                  {hosts.map((h) => (
+                    <MenuItem key={h.hostid} value={h.host}>
+                      {h.host}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              {newHostname && (
+                <FormControl size="small" fullWidth>
+                  <InputLabel>Item</InputLabel>
+                  <Select
+                    label="Item"
+                    value={newItemId}
+                    onChange={(e) => setNewItemId(e.target.value)}
+                    disabled={itemsLoading}
+                  >
+                    {itemsLoading ? (
+                      <MenuItem value="" disabled>Loading…</MenuItem>
+                    ) : newItems.length === 0 ? (
+                      <MenuItem value="" disabled>No numeric items on this host</MenuItem>
+                    ) : (
+                      newItems.map((i) => (
+                        <MenuItem key={i.itemid} value={i.itemid}>
+                          <Box>
+                            <Typography sx={{ fontSize: "0.82rem", fontWeight: 500 }}>
+                              {i.name}
+                            </Typography>
+                            <Typography sx={{ fontSize: "0.7rem", fontFamily: "monospace", color: "text.secondary" }}>
+                              {i.key_}
+                            </Typography>
+                          </Box>
+                        </MenuItem>
+                      ))
+                    )}
+                  </Select>
+                </FormControl>
+              )}
+            </Stack>
+          </Box>
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" onClick={handleSave}>
+          Save
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+};
+
 // ── Metric widget card ────────────────────────────────────────────────
 
 const MetricWidgetCard = ({
@@ -622,6 +946,8 @@ const MetricWidgetCard = ({
   alertEvents?: import("../app/api").AlertEvent[];
 }) => {
   const periodOption = PERIOD_OPTIONS[widget.periodIdx] ?? PERIOD_OPTIONS[5];
+  const [configOpen, setConfigOpen] = useState(false);
+  const displayTitle = widget.customTitle ?? widget.itemName;
 
   return (
     <Paper
@@ -674,9 +1000,9 @@ const MetricWidgetCard = ({
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
               }}
-              title={widget.itemName}
+              title={displayTitle}
             >
-              {widget.itemName}
+              {displayTitle}
             </Typography>
             <Typography
               variant="caption"
@@ -707,6 +1033,15 @@ const MetricWidgetCard = ({
               </MenuItem>
             ))}
           </Select>
+          <Tooltip title="Configure metric">
+            <IconButton
+              size="small"
+              onClick={() => setConfigOpen(true)}
+              sx={{ color: "text.disabled", "&:hover": { color: "primary.light" }, p: 0.3 }}
+            >
+              <TuneIcon sx={{ fontSize: 13 }} />
+            </IconButton>
+          </Tooltip>
           <IconButton
             size="small"
             aria-label="Remove widget"
@@ -723,11 +1058,25 @@ const MetricWidgetCard = ({
       </Box>
       <Box sx={{ flex: 1, minHeight: 0, p: 1, overflow: "hidden" }}>
         <ItemChart
+          key={widget.itemid}
           itemid={widget.itemid}
           minutes={periodOption.minutes}
           alertEvents={alertEvents}
+          lineColor={widget.lineColor}
+          onPeriodChange={(delta) =>
+            onUpdate({
+              periodIdx: Math.max(0, Math.min(PERIOD_OPTIONS.length - 1, widget.periodIdx + delta)),
+            })
+          }
         />
       </Box>
+
+      <MetricConfigDialog
+        open={configOpen}
+        widget={widget}
+        onClose={() => setConfigOpen(false)}
+        onSave={(updates) => onUpdate(updates)}
+      />
     </Paper>
   );
 };

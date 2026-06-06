@@ -2,6 +2,7 @@ services:
   backend:
     build: apps/backend/
     container_name: backend
+    network_mode: bridge
     ports:
       - "6769:6769"
     env_file: apps/backend/.env
@@ -9,7 +10,6 @@ services:
   frontend:
     build: apps/frontend/
     container_name: frontend
+    network_mode: bridge
     ports:
       - "42069:42069"
-    depends_on:
-      - backend

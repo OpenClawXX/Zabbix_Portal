@@ -8,105 +8,94 @@ class Item_Manager(Zabbix_Base):
 
     def add_item(
         self, hostname, item_name, item_key, value_type=3, team_name: str = ""
-    ):
+    ) -> tuple[str | None, str | None]:
         """
         Adds a new monitoring item to an existing host.
         value_type: 0=float, 1=string, 2=log, 3=integer, 4=text
-        team_name: when set, tags the item with {"tag": "team", "value": team_name}
+        Returns (item_id, error_message). item_id is None on failure.
         """
         if not self.zapi:
-            print("❌ No API connection available.")
-            return None
+            return None, "Zabbix API not connected."
 
         try:
-            # 1. Resolve host ID
             host_data = self.zapi.host.get(
                 filter={"host": [hostname]}, output=["hostid"]
             )
             if not host_data:
-                print(f"⚠️ Host '{hostname}' not found.")
-                return None
+                return None, f"Host '{hostname}' not found in Zabbix."
 
             host_id = host_data[0]["hostid"]
 
-            # 2. Resolve interface ID
             interfaces = self.zapi.hostinterface.get(hostids=host_id)
             if not interfaces:
-                print(f"⚠️ No interfaces found for host '{hostname}'.")
-                return None
+                return None, f"No interfaces found for host '{hostname}'."
             interface_id = interfaces[0]["interfaceid"]
 
-            # 3. Create the item, tagging with team label when available (Zabbix 5.4+)
-            tags = [{"tag": "team", "value": team_name}] if team_name else []
-            result = self.zapi.item.create(
+            kwargs: dict = dict(
                 name=item_name,
                 key_=item_key,
                 hostid=host_id,
                 interfaceid=interface_id,
-                type=0,  # Zabbix Agent (Passive)
+                type=0,       # Zabbix Agent (Passive)
                 value_type=value_type,
                 delay="1m",
-                tags=tags,
             )
+            # Only attach tags when non-empty — some older Zabbix versions reject tags=[]
+            if team_name:
+                kwargs["tags"] = [{"tag": "team", "value": team_name}]
+
+            result = self.zapi.item.create(**kwargs)
             item_id = result["itemids"][0]
-            print(
-                f"✅ Item '{item_name}' (key: {item_key}) added to '{hostname}' (ID: {item_id})"
-            )
-            return item_id
+            print(f"✅ Item '{item_name}' (key: {item_key}) added to '{hostname}' (ID: {item_id})")
+            return item_id, None
 
         except Exception as e:
+            msg = str(e)
             print(f"❌ Item Creation Failed: {repr(e)}")
-            return None
+            return None, msg
 
     def add_trigger(
         self, hostname, item_key, trigger_name, threshold, operator=">", priority=3
-    ):
+    ) -> tuple[str | None, str | None]:
         """
         Adds a trigger for a host item.
-        Example expression: {myhost:system.cpu.load.last()}>5
-        priority: 0=Not classified, 1=Information, 2=Warning, 3=Average, 4=High, 5=Disaster
+        Automatically picks the expression syntax based on the Zabbix server version:
+          >=6.2 → last(/hostname/key)>value   (new syntax)
+          <6.2  → {hostname:key.last()}>value  (classic syntax)
+        Returns (trigger_id, error_message). trigger_id is None on failure.
         """
         if not self.zapi:
-            print("❌ No API connection available.")
-            return None
+            return None, "Zabbix API not connected."
 
         valid_operators = {">", "<", ">=", "<=", "=", "<>"}
         if operator not in valid_operators:
-            print(f"❌ Invalid operator '{operator}'.")
-            return None
+            return None, f"Invalid operator '{operator}'."
 
         try:
-            # Verify the host exists.
             host_data = self.zapi.host.get(
                 filter={"host": [hostname]}, output=["hostid"]
             )
             if not host_data:
-                print(f"⚠️ Host '{hostname}' not found.")
-                return None
+                return None, f"Host '{hostname}' not found in Zabbix."
 
-            # Verify the item exists on this host.
-            item_data = self.zapi.item.get(
-                hostids=host_data[0]["hostid"],
-                filter={"key_": [item_key]},
-                output=["itemid", "name", "key_"],
-            )
-            if not item_data:
-                print(f"⚠️ Item key '{item_key}' was not found on host '{hostname}'.")
-                return None
+            # Choose expression format based on server version.
+            # Zabbix 6.2+ dropped the classic {host:key.last()} syntax.
+            if self._zabbix_version >= (6, 2):
+                expression = f"last(/{hostname}/{item_key}){operator}{threshold}"
+            else:
+                expression = f"{{{hostname}:{item_key}.last()}}{operator}{threshold}"
 
-            expression = f"{{{hostname}:{item_key}.last()}}{operator}{threshold}"
             result = self.zapi.trigger.create(
                 description=trigger_name, expression=expression, priority=int(priority)
             )
             trigger_id = result["triggerids"][0]
-            print(
-                f"✅ Trigger '{trigger_name}' created on '{hostname}' (ID: {trigger_id})"
-            )
-            return trigger_id
+            print(f"✅ Trigger '{trigger_name}' created on '{hostname}' (ID: {trigger_id})")
+            return trigger_id, None
 
         except Exception as e:
+            msg = str(e)
             print(f"❌ Trigger Creation Failed: {repr(e)}")
-            return None
+            return None, msg
 
     def list_items(self, hostname: str, include_inherited: bool = False) -> list[dict]:
         """List items on a host. include_inherited=True returns template items too."""
