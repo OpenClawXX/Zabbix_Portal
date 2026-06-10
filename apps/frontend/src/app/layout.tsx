@@ -8,7 +8,8 @@ import "@fontsource/inter/latin-700.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Zabbix DevOps",
+  title: "Overwatch",
+  icons: { icon: "/Overwatch_sign.png" },
 };
 
 const RootLayout = ({ children }: { children: React.ReactNode }) => (

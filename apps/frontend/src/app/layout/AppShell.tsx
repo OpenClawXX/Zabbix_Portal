@@ -1138,7 +1138,7 @@ export const AppShell = ({ children }: PropsWithChildren) => {
   }, [notifications]);
 
   const pageTitle = useMemo(
-    () => navItems.find((n) => n.href === pathname)?.label ?? "Zabbix DevOps",
+    () => navItems.find((n) => n.href === pathname)?.label ?? "Overwatch",
     [pathname],
   );
 
@@ -1151,25 +1151,16 @@ export const AppShell = ({ children }: PropsWithChildren) => {
       <Box sx={{ px: 2, pt: 2, pb: 1.75 }}>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
           <Box
-            sx={{
-              width: 34,
-              height: 34,
-              borderRadius: 2,
-              background: "linear-gradient(135deg, #3B82F6 0%, #2563EB 100%)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              flexShrink: 0,
-              boxShadow: "0 4px 12px rgba(59,130,246,0.4)",
-            }}
-          >
-            <ComputerOutlinedIcon sx={{ fontSize: 18, color: "#fff" }} />
-          </Box>
+            component="img"
+            src="/Overwatch_sign.png"
+            alt="Overwatch"
+            sx={{ width: 34, height: 34, objectFit: "contain", flexShrink: 0 }}
+          />
           <Box sx={{ flex: 1, minWidth: 0 }}>
             <Typography
               sx={{ fontWeight: 700, fontSize: "0.875rem", lineHeight: 1.2, letterSpacing: 0.1 }}
             >
-              Zabbix DevOps
+              Overwatch
             </Typography>
             <Typography sx={{ fontSize: "0.65rem", color: "text.secondary", lineHeight: 1.3 }}>
               Control Plane

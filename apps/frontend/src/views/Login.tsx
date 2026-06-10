@@ -1,6 +1,5 @@
 "use client";
 
-import ComputerOutlinedIcon from "@mui/icons-material/ComputerOutlined";
 import VisibilityOffOutlinedIcon from "@mui/icons-material/VisibilityOffOutlined";
 import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
 import {
@@ -70,22 +69,13 @@ export const Login = () => {
         {/* Logo */}
         <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", mb: 4 }}>
           <Box
-            sx={{
-              width: 48,
-              height: 48,
-              borderRadius: 3,
-              background: "linear-gradient(135deg, #3B82F6 0%, #2563EB 100%)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              mb: 2,
-              boxShadow: "0 8px 24px rgba(59,130,246,0.45)",
-            }}
-          >
-            <ComputerOutlinedIcon sx={{ color: "#fff", fontSize: 24 }} />
-          </Box>
+            component="img"
+            src="/Overwatch_sign.png"
+            alt="Overwatch"
+            sx={{ width: 72, height: 72, objectFit: "contain", mb: 2 }}
+          />
           <Typography variant="h5" sx={{ fontWeight: 700, letterSpacing: -0.4, color: "#E2E8F0" }}>
-            Zabbix DevOps
+            Overwatch
           </Typography>
           <Typography variant="body2" sx={{ mt: 0.5, color: "#64748B" }}>
             Sign in to your control plane
@@ -209,7 +199,7 @@ export const Login = () => {
           variant="caption"
           sx={{ display: "block", textAlign: "center", mt: 3, color: "#1E3A5F" }}
         >
-          Zabbix DevOps Control Plane · Internal Use Only
+          Overwatch · Internal Use Only
         </Typography>
       </Box>
 
