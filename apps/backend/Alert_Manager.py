@@ -74,6 +74,44 @@ class Alert_Manager(Zabbix_Base):
         finally:
             conn.close()
 
+    def update_rule(
+        self,
+        rule_id: int,
+        user_id: int,
+        operator: str,
+        threshold: float,
+        severity: int,
+        item_id: str | None = None,
+        item_name: str | None = None,
+        hostname: str | None = None,
+    ) -> bool:
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                if item_id and item_name and hostname:
+                    cur.execute(
+                        """UPDATE alert_rules
+                           SET operator = %s, threshold = %s, severity = %s,
+                               item_id = %s, item_name = %s, hostname = %s
+                           WHERE id = %s AND user_id = %s""",
+                        (operator, threshold, severity, item_id, item_name, hostname, rule_id, user_id),
+                    )
+                else:
+                    cur.execute(
+                        """UPDATE alert_rules
+                           SET operator = %s, threshold = %s, severity = %s
+                           WHERE id = %s AND user_id = %s""",
+                        (operator, threshold, severity, rule_id, user_id),
+                    )
+                updated = cur.rowcount > 0
+            conn.commit()
+            return updated
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def toggle_rule(self, rule_id: int, user_id: int) -> bool | None:
         conn = get_conn()
         try:
@@ -97,11 +135,13 @@ class Alert_Manager(Zabbix_Base):
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    """SELECT ae.id, ae.rule_id, ar.item_id, ae.item_name, ae.hostname,
+                    """SELECT ae.id, ae.rule_id,
+                              COALESCE(ae.item_id, ar.item_id) AS item_id,
+                              ae.item_name, ae.hostname,
                               ae.operator, ae.threshold, ae.actual_value, ae.severity,
                               EXTRACT(EPOCH FROM ae.fired_at)::BIGINT AS fired_at
                        FROM alert_events ae
-                       JOIN alert_rules ar ON ae.rule_id = ar.id
+                       LEFT JOIN alert_rules ar ON ae.rule_id = ar.id
                        WHERE ae.user_id = %s
                        ORDER BY ae.fired_at DESC LIMIT %s""",
                     (user_id, limit),
@@ -186,11 +226,12 @@ class Alert_Manager(Zabbix_Base):
                         fired_this_cycle.add(rule["item_id"])
                         cur.execute(
                             """INSERT INTO alert_events
-                                   (rule_id, user_id, item_name, hostname,
+                                   (rule_id, user_id, item_id, item_name, hostname,
                                     operator, threshold, actual_value, severity)
-                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-                            (rule["id"], rule["user_id"], rule["item_name"],
-                             rule["hostname"], op, rule["threshold"], val, rule["severity"]),
+                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                            (rule["id"], rule["user_id"], rule["item_id"],
+                             rule["item_name"], rule["hostname"], op,
+                             rule["threshold"], val, rule["severity"]),
                         )
                         cur.execute(
                             "UPDATE alert_rules SET is_firing = TRUE WHERE id = %s",

@@ -30,3 +30,7 @@ dist/
 
 *.log
 .DS_Store
+
+# Secrets — injected at runtime via docker-compose env_file or Kubernetes Secret
+.env
+.env.*

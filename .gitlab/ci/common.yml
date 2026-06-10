@@ -6,10 +6,10 @@
 .base:
   interruptible: true
   tags:
-    - docker  # replace with your GitLab runner tag
+    - $RUNNER_TAG
 
 .docker_base:
   extends: .base
   image:
-    name: <your-kaniko-image>  # PRIVATE NETWORK: replace with your internal Kaniko image (e.g. your-registry/kaniko:latest)
+    name: $KANIKO_IMAGE
     entrypoint: [""]

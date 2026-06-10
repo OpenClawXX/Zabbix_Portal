@@ -1,8 +1,11 @@
+import logging
 import os
 import secrets
 import threading
 
 from Zabbix_Base import Zabbix_Base
+
+logger = logging.getLogger(__name__)
 
 # How often (seconds) the background thread runs a full sync.
 # Override with ZABBIX_SYNC_INTERVAL env var.
@@ -114,10 +117,10 @@ class ZabbixSync(Zabbix_Base):
                 pass
             if self._zabbix_major >= 6:
                 self._roleids = self._fetch_roleids()
-        print(
-            f"ZabbixSync: Zabbix {self._zabbix_major}.{self._zabbix_minor} — "
-            f"rights_field='{self._rights_field}', "
-            f"host_groups_param='{self._select_hg_param}'."
+        logger.info(
+            "ZabbixSync: Zabbix %d.%d — rights_field=%r, host_groups_param=%r.",
+            self._zabbix_major, self._zabbix_minor,
+            self._rights_field, self._select_hg_param,
         )
 
     # ── Internal helpers ──────────────────────────────────────────────────────
@@ -131,9 +134,9 @@ class ZabbixSync(Zabbix_Base):
                 t = int(role.get("type", 0))
                 if t in (1, 2, 3) and t not in result:
                     result[t] = str(role["roleid"])
-            print(f"ZabbixSync: resolved roleids = {result}")
+            logger.debug("ZabbixSync: resolved roleids = %s", result)
         except Exception as exc:
-            print(f"ZabbixSync._fetch_roleids failed: {repr(exc)}")
+            logger.error("ZabbixSync._fetch_roleids failed: %r", exc)
         return result
 
     def _roleid_for(self, user_type: int) -> str:
@@ -152,7 +155,7 @@ class ZabbixSync(Zabbix_Base):
             )
             return rows[0] if rows else None
         except Exception as exc:
-            print(f"ZabbixSync._get_zabbix_user('{username}') failed: {repr(exc)}")
+            logger.error("ZabbixSync._get_zabbix_user(%r) failed: %r", username, exc)
             return None
 
     def _get_or_create_usergroup(self, name: str) -> str | None:
@@ -166,7 +169,7 @@ class ZabbixSync(Zabbix_Base):
             result = self.zapi.usergroup.create(name=name, gui_access=0, users_status=0)
             return result["usrgrpids"][0]
         except Exception as exc:
-            print(f"ZabbixSync._get_or_create_usergroup('{name}') failed: {repr(exc)}")
+            logger.error("ZabbixSync._get_or_create_usergroup(%r) failed: %r", name, exc)
             return None
 
     def _get_or_create_hostgroup(self, name: str) -> str | None:
@@ -180,7 +183,7 @@ class ZabbixSync(Zabbix_Base):
             result = self.zapi.hostgroup.create(name=name)
             return result["groupids"][0]
         except Exception as exc:
-            print(f"ZabbixSync._get_or_create_hostgroup('{name}') failed: {repr(exc)}")
+            logger.error("ZabbixSync._get_or_create_hostgroup(%r) failed: %r", name, exc)
             return None
 
     def _set_usergroup_permission(
@@ -196,11 +199,12 @@ class ZabbixSync(Zabbix_Base):
                 usrgrpid=usrgrpid,
                 **{self._rights_field: [{"permission": perm, "id": host_groupid}]},
             )
-            print(
-                f"ZabbixSync: set permission={perm} for usrgrp={usrgrpid} on hostgroup={host_groupid}."
+            logger.debug(
+                "ZabbixSync: set permission=%d for usrgrp=%s on hostgroup=%s.",
+                perm, usrgrpid, host_groupid,
             )
         except Exception as exc:
-            print(f"ZabbixSync._set_usergroup_permission FAILED: {repr(exc)}")
+            logger.error("ZabbixSync._set_usergroup_permission failed: %r", exc)
 
     def _user_type(self, roles: list[str]) -> int:
         return max((_ROLE_TO_TYPE.get(r, 1) for r in roles), default=1)
@@ -217,8 +221,8 @@ class ZabbixSync(Zabbix_Base):
             team_name if team_name else _DEFAULT_GROUP
         )
         if not usrgrpid:
-            print(
-                f"ZabbixSync.push_user('{username}'): could not resolve user group — skipping."
+            logger.warning(
+                "ZabbixSync.push_user(%r): could not resolve user group — skipping.", username
             )
             return
         usrgrps = [{"usrgrpid": usrgrpid}]
@@ -246,9 +250,9 @@ class ZabbixSync(Zabbix_Base):
                 else:
                     payload["type"] = user_type
                 self.zapi.user.create(**payload)
-            print(f"ZabbixSync: pushed user '{username}' to Zabbix (type={user_type}).")
+            logger.info("ZabbixSync: pushed user %r to Zabbix (type=%d).", username, user_type)
         except Exception as exc:
-            print(f"ZabbixSync.push_user('{username}') FAILED: {repr(exc)}")
+            logger.error("ZabbixSync.push_user(%r) failed: %r", username, exc)
 
     def delete_user(self, username: str) -> None:
         """Delete a Zabbix user matching the portal user."""
@@ -259,9 +263,9 @@ class ZabbixSync(Zabbix_Base):
             return
         try:
             self.zapi.user.delete(existing["userid"])
-            print(f"ZabbixSync: deleted user '{username}' from Zabbix.")
+            logger.info("ZabbixSync: deleted user %r from Zabbix.", username)
         except Exception as exc:
-            print(f"ZabbixSync.delete_user('{username}') failed: {repr(exc)}")
+            logger.error("ZabbixSync.delete_user(%r) failed: %r", username, exc)
 
     def update_password(self, username: str, new_password: str) -> None:
         """Sync a password change to Zabbix."""
@@ -272,9 +276,9 @@ class ZabbixSync(Zabbix_Base):
             return
         try:
             self.zapi.user.update(userid=existing["userid"], passwd=new_password)
-            print(f"ZabbixSync: updated password for '{username}' in Zabbix.")
+            logger.info("ZabbixSync: updated password for %r in Zabbix.", username)
         except Exception as exc:
-            print(f"ZabbixSync.update_password('{username}') failed: {repr(exc)}")
+            logger.error("ZabbixSync.update_password(%r) failed: %r", username, exc)
 
     # ── Portal → Zabbix: teams and host visibility ────────────────────────────
 
@@ -291,8 +295,8 @@ class ZabbixSync(Zabbix_Base):
         host_grpid = self._get_or_create_hostgroup(team_name)
         if usrgrpid and host_grpid:
             self._set_usergroup_permission(usrgrpid, host_grpid)
-            print(
-                f"ZabbixSync: team '{team_name}' → user group + host group + permissions set."
+            logger.info(
+                "ZabbixSync: team %r — user group + host group + permissions set.", team_name
             )
 
     def delete_team(self, team_name: str) -> None:
@@ -308,11 +312,11 @@ class ZabbixSync(Zabbix_Base):
             hg = self.zapi.hostgroup.get(filter={"name": team_name}, output=["groupid"])
             if hg:
                 self.zapi.hostgroup.delete(hg[0]["groupid"])
-            print(
-                f"ZabbixSync: deleted Zabbix user group and host group for '{team_name}'."
+            logger.info(
+                "ZabbixSync: deleted Zabbix user group and host group for %r.", team_name
             )
         except Exception as exc:
-            print(f"ZabbixSync.delete_team('{team_name}') failed: {repr(exc)}")
+            logger.error("ZabbixSync.delete_team(%r) failed: %r", team_name, exc)
 
     # ── Portal → Zabbix: host assignments ────────────────────────────────────
 
@@ -327,8 +331,8 @@ class ZabbixSync(Zabbix_Base):
                 **{self._select_hg_param: ["groupid"]},
             )
             if not hosts:
-                print(
-                    f"ZabbixSync.push_host_to_team: host '{hostname}' not found in Zabbix."
+                logger.warning(
+                    "ZabbixSync.push_host_to_team: host %r not found in Zabbix.", hostname
                 )
                 return
             host = hosts[0]
@@ -343,16 +347,16 @@ class ZabbixSync(Zabbix_Base):
                     hostid=host["hostid"],
                     groups=current_groups + [{"groupid": host_grpid}],
                 )
-                print(
-                    f"ZabbixSync: host '{hostname}' added to Zabbix host group '{team_name}'."
+                logger.info(
+                    "ZabbixSync: host %r added to Zabbix host group %r.", hostname, team_name
                 )
             else:
-                print(
-                    f"ZabbixSync: host '{hostname}' already in host group '{team_name}'."
+                logger.debug(
+                    "ZabbixSync: host %r already in host group %r.", hostname, team_name
                 )
         except Exception as exc:
-            print(
-                f"ZabbixSync.push_host_to_team('{hostname}', '{team_name}') FAILED: {repr(exc)}"
+            logger.error(
+                "ZabbixSync.push_host_to_team(%r, %r) failed: %r", hostname, team_name, exc
             )
 
     def remove_host_from_team(self, hostname: str, team_name: str) -> None:
@@ -379,17 +383,18 @@ class ZabbixSync(Zabbix_Base):
             ]
             if not remaining:
                 # Hosts must belong to at least one group — keep the original if this would leave none
-                print(
-                    f"ZabbixSync: skipping removal of '{hostname}' from '{team_name}' — would leave host with no group."
+                logger.warning(
+                    "ZabbixSync: skipping removal of %r from %r — would leave host with no group.",
+                    hostname, team_name,
                 )
                 return
             self.zapi.host.update(hostid=host["hostid"], groups=remaining)
-            print(
-                f"ZabbixSync: host '{hostname}' removed from Zabbix host group '{team_name}'."
+            logger.info(
+                "ZabbixSync: host %r removed from Zabbix host group %r.", hostname, team_name
             )
         except Exception as exc:
-            print(
-                f"ZabbixSync.remove_host_from_team('{hostname}', '{team_name}') failed: {repr(exc)}"
+            logger.error(
+                "ZabbixSync.remove_host_from_team(%r, %r) failed: %r", hostname, team_name, exc
             )
 
     # ── Zabbix → Portal: full sync ────────────────────────────────────────────
@@ -419,13 +424,13 @@ class ZabbixSync(Zabbix_Base):
             for hostname in hostnames:
                 self.push_host_to_team(hostname, team_name)
 
-        print(f"ZabbixSync.bootstrap_teams: bootstrapped {len(teams)} team(s).")
+        logger.info("ZabbixSync.bootstrap_teams: bootstrapped %d team(s).", len(teams))
 
     def pull_users(self) -> None:
         """Import Zabbix users and groups into the portal (runs on startup).
 
         Skips users already in the portal. Generates a temporary password for
-        each imported user — print to logs, reset via portal after first login.
+        each imported user — logged at INFO, reset via portal after first login.
         """
         if not self.zapi:
             return
@@ -441,7 +446,7 @@ class ZabbixSync(Zabbix_Base):
                 selectUsrgrps=["usrgrpid", "name"],
             )
         except Exception as exc:
-            print(f"ZabbixSync.pull_users: failed to list Zabbix users: {repr(exc)}")
+            logger.error("ZabbixSync.pull_users: failed to list Zabbix users: %r", exc)
             return
 
         portal_teams = {t["name"]: t["id"] for t in um.list_teams()}
@@ -481,9 +486,9 @@ class ZabbixSync(Zabbix_Base):
                 roles=roles,
                 team_id=team_id,
             )
-            print(
-                f"ZabbixSync: imported '{username}' → portal "
-                f"(roles={roles}, team_id={team_id}, temp password: {temp_password})"
+            logger.info(
+                "ZabbixSync: imported %r → portal (roles=%s, team_id=%s, temp_password=%s).",
+                username, roles, team_id, temp_password,
             )
 
     def full_sync(self) -> None:
@@ -513,7 +518,7 @@ class ZabbixSync(Zabbix_Base):
                 selectUsrgrps=["usrgrpid", "name"],
             )
         except Exception as exc:
-            print(f"ZabbixSync.full_sync: failed to fetch users: {repr(exc)}")
+            logger.error("ZabbixSync.full_sync: failed to fetch users: %r", exc)
             return
 
         zabbix_usernames = {
@@ -558,8 +563,8 @@ class ZabbixSync(Zabbix_Base):
                         or existing.get("team_id") != team_id
                     ):
                         um.update_user_profile(existing["id"], roles, team_id)
-                        print(
-                            f"ZabbixSync: updated '{username}' → roles={roles}, team_id={team_id}."
+                        logger.info(
+                            "ZabbixSync: updated %r → roles=%s, team_id=%s.", username, roles, team_id
                         )
                 else:
                     temp_password = secrets.token_urlsafe(16)
@@ -569,11 +574,9 @@ class ZabbixSync(Zabbix_Base):
                         roles=roles,
                         team_id=team_id,
                     )
-                    print(
-                        f"ZabbixSync: auto-imported new Zabbix user '{username}' → portal."
-                    )
+                    logger.info("ZabbixSync: auto-imported new Zabbix user %r → portal.", username)
         except Exception as exc:
-            print(f"ZabbixSync.full_sync: user import failed: {repr(exc)}")
+            logger.error("ZabbixSync.full_sync: user import failed: %r", exc)
 
         # ── 3. Users: remove portal users deleted from Zabbix ─────────────────
         try:
@@ -582,11 +585,11 @@ class ZabbixSync(Zabbix_Base):
                     continue
                 if u["username"].lower() not in zabbix_usernames:
                     um.delete_user(u["id"])
-                    print(
-                        f"ZabbixSync: removed portal user '{u['username']}' — deleted from Zabbix."
+                    logger.info(
+                        "ZabbixSync: removed portal user %r — deleted from Zabbix.", u["username"]
                     )
         except Exception as exc:
-            print(f"ZabbixSync.full_sync: user deletion sync failed: {repr(exc)}")
+            logger.error("ZabbixSync.full_sync: user deletion sync failed: %r", exc)
 
         # ── 4. Groups: import new Zabbix user groups as portal teams; remove deleted ──
         try:
@@ -604,9 +607,7 @@ class ZabbixSync(Zabbix_Base):
                     continue
                 if name not in portal_team_names:
                     um.create_team(name)
-                    print(
-                        f"ZabbixSync: imported new Zabbix group '{name}' as portal team."
-                    )
+                    logger.info("ZabbixSync: imported new Zabbix group %r as portal team.", name)
 
             # Remove portal teams whose Zabbix user group was deleted
             for team in portal_team_list:
@@ -615,11 +616,11 @@ class ZabbixSync(Zabbix_Base):
                     continue
                 if name not in zabbix_group_names:
                     um.delete_team(team["id"])
-                    print(
-                        f"ZabbixSync: removed portal team '{name}' — Zabbix group deleted."
+                    logger.info(
+                        "ZabbixSync: removed portal team %r — Zabbix group deleted.", name
                     )
         except Exception as exc:
-            print(f"ZabbixSync.full_sync: group sync failed: {repr(exc)}")
+            logger.error("ZabbixSync.full_sync: group sync failed: %r", exc)
 
         # ── 5. Hosts: sync Zabbix host group membership → portal assignments ──
         try:
@@ -660,11 +661,12 @@ class ZabbixSync(Zabbix_Base):
                 for hostname in team.get("hosts", []):
                     if (hostname, team_name) not in zabbix_assignments:
                         um.unassign_host(hostname)
-                        print(
-                            f"ZabbixSync: removed portal assignment '{hostname}' → '{team_name}' — no longer in Zabbix group or tag."
+                        logger.info(
+                            "ZabbixSync: removed portal assignment %r → %r — no longer in Zabbix.",
+                            hostname, team_name,
                         )
         except Exception as exc:
-            print(f"ZabbixSync.full_sync: host assignment sync failed: {repr(exc)}")
+            logger.error("ZabbixSync.full_sync: host assignment sync failed: %r", exc)
 
         if self._on_sync:
             try:
@@ -678,7 +680,7 @@ class ZabbixSync(Zabbix_Base):
         """Listen for pg_notify events from Zabbix tables and sync immediately on change.
 
         Requires notify triggers to be installed via install_notify_triggers() in Database.py.
-        Falls back gracefully if the connection drops — errors are printed but do not crash.
+        Falls back gracefully if the connection drops — errors are logged but do not crash.
         """
         import select as sel
         import psycopg2
@@ -691,7 +693,7 @@ class ZabbixSync(Zabbix_Base):
                 conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
                 with conn.cursor() as cur:
                     cur.execute("LISTEN zabbix_changes;")
-                print(
+                logger.info(
                     "ZabbixSync: real-time listener active — syncing on Zabbix DB changes."
                 )
                 while True:
@@ -702,9 +704,9 @@ class ZabbixSync(Zabbix_Base):
                             try:
                                 self.full_sync()
                             except Exception as exc:
-                                print(f"ZabbixSync realtime sync error: {repr(exc)}")
+                                logger.error("ZabbixSync realtime sync error: %r", exc)
             except Exception as exc:
-                print(f"ZabbixSync real-time listener crashed: {repr(exc)}")
+                logger.error("ZabbixSync real-time listener crashed: %r", exc)
 
         t = threading.Thread(target=_listen, daemon=True, name="zabbix-notify-listener")
         t.start()
@@ -724,8 +726,10 @@ class ZabbixSync(Zabbix_Base):
                 try:
                     self.full_sync()
                 except Exception as exc:
-                    print(f"ZabbixSync background loop error: {repr(exc)}")
+                    logger.error("ZabbixSync background loop error: %r", exc)
 
         t = threading.Thread(target=_loop, daemon=True, name="zabbix-sync")
         t.start()
-        print(f"ZabbixSync: background full-sync started (interval={_SYNC_INTERVAL}s).")
+        logger.info(
+            "ZabbixSync: background full-sync started (interval=%ds).", _SYNC_INTERVAL
+        )

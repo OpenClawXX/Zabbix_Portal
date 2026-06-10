@@ -21,10 +21,3 @@ export const clearToken = () => {
   document.cookie = `${TOKEN_COOKIE}=; path=/; max-age=0`;
 };
 
-export const parseToken = (token: string): AuthUser | null => {
-  try {
-    return JSON.parse(atob(token.split(".")[1])) as AuthUser;
-  } catch {
-    return null;
-  }
-};

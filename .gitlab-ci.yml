@@ -6,6 +6,43 @@ stages:
   - production
   - dr
 
+# =============================================================================
+# Project-level variables — edit these values and the pipeline will work.
+# Sensitive values (STAGING_TOKEN, PROD_TOKEN) must be set in
+# GitLab Settings → CI/CD → Variables (masked + protected) — never here.
+# =============================================================================
+variables:
+
+  # ── Runner ────────────────────────────────────────────────────────────────
+  RUNNER_TAG: "<your-runner-tag>"                   # GitLab runner tag (e.g. docker, staging-runner)
+
+  # ── Private registry images ───────────────────────────────────────────────
+  KANIKO_IMAGE: "<your-kaniko-image>"               # internal Kaniko image (e.g. your-registry/kaniko:latest)
+  PYTHON_IMAGE: "<your-python-image>"               # internal Python image (e.g. your-registry/python:3.12-slim)
+  NODE_IMAGE: "<your-node-image>"                   # internal Node image (e.g. your-registry/node:22-alpine)
+  HELM_IMAGE: "<your-helm-image>"       
+  GIT_IMAGE: "<your-git-image>"            # internal Helm image (e.g. your-registry/helm:latest)
+
+  # ── Artifactory registry ──────────────────────────────────────────────────
+  ARTIFACTORY_REGISTRY: "<your-artifactory-registry>"  # registry path (e.g. artifactory.example.com/docker-local)
+
+  # ── Build control ────────────────────────────────────────────────────────
+  FORCE_BUILD: "0"                                  # set to "1" to force rebuild all apps even without code changes
+
+  # ── Helm / Kubernetes ─────────────────────────────────────────────────────
+  PROJECT_NAME: "zabbix-portal"                     # Helm release name — must match helm/charts/<name>/
+  K8S_NAMESPACE: "<your-namespace>"                 # OpenShift namespace to deploy into
+
+  # ── Cluster endpoints ─────────────────────────────────────────────────────
+  STAGING_SERVER: "<your-staging-api-url>"          # staging cluster API URL (e.g. https://api.staging.example.com:6443)
+  PROD_SERVER: "<your-prod-api-url>"                # production cluster API URL
+  DR_SERVER: "<your-dr-api-url>"                    # DR cluster API URL
+
+  # ── Cluster tokens — set in GitLab Settings → CI/CD → Variables ──────────
+  # STAGING_TOKEN: masked + protected CI variable
+  # PROD_TOKEN:    masked + protected CI variable
+  # DR_TOKEN:      masked + protected CI variable
+
 include:
   - local: ".gitlab/ci/common.yml"
   - local: ".gitlab/ci/detect.yml"

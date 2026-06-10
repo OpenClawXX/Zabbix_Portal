@@ -2,6 +2,8 @@ export type WidgetConfig = {
   i: string;
   graphid: string;
   graphName: string;
+  hostId?: string;
+  hostName?: string;
   mode: "native" | "chartjs";
   periodIdx: number;
   x: number;
@@ -114,6 +116,9 @@ export type Problem = {
   clock: number;
   age_seconds: number;
   acknowledged: boolean;
+  ack_user?: string;
+  ack_time?: string;
+  ack_note?: string;
 };
 
 // Persisted notification history entry (stored in localStorage)
@@ -264,6 +269,12 @@ export const api = {
   },
   deleteHost: (hostname: string) =>
     apiFetch<{ message: string }>(`/hosts/${encodeURIComponent(hostname)}`, { method: "DELETE" }),
+  updateHostTags: (hostname: string, tags: HostTag[]) =>
+    apiFetch<{ message: string }>(`/hosts/${encodeURIComponent(hostname)}/tags`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tags }),
+    }),
   addItem: (payload: {
     hostname: string;
     item_name: string;
@@ -275,6 +286,16 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     }),
+  listItemKeys: () =>
+    apiFetch<{
+      items: Array<{
+        key_: string;
+        name: string;
+        value_type: string;
+        group: string;
+      }>;
+    }>("/items/keys"),
+
   listItems: (hostname: string, includeInherited = false) =>
     apiFetch<{
       items: Array<{
@@ -319,6 +340,148 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  addHttpItem: (payload: {
+    hostname: string;
+    item_name: string;
+    url: string;
+    item_key?: string;
+    request_method?: number;
+    status_codes?: string;
+    timeout?: string;
+    verify_peer?: boolean;
+    follow_redirects?: boolean;
+    posts?: string;
+    value_type?: number;
+    authtype?: number;
+    username?: string;
+    password?: string;
+    regex_preprocessing?: boolean;
+    regex_pattern?: string;
+    regex_output?: string;
+    regex_no_match_value?: string;
+  }) =>
+    apiFetch<{ message: string; itemid: string }>("/items/http", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+
+  addServiceItem: (payload: {
+    hostname: string;
+    service_type: string;
+    port?: number | null;
+    item_name?: string;
+  }) =>
+    apiFetch<{ message: string; itemid: string }>("/items/service", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+
+  addFileWatchItem: (payload: {
+    hostname: string;
+    file_path: string;
+    check_type: "checksum" | "mtime" | "size" | "exists" | "folder_latest";
+    item_name?: string;
+    folder_os?: "linux" | "windows";
+    create_trigger?: boolean;
+    trigger_name?: string;
+    trigger_priority?: number;
+    trigger_type?: "change" | "age";
+    max_age_minutes?: number;
+  }) =>
+    apiFetch<{ message: string; itemid: string; triggerid: string | null; trigger_error: string | null }>("/items/filewatch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+
+  addScriptItem: (payload: {
+    hostname: string;
+    script_type: "bash" | "powershell";
+    script_mode: "command" | "file";
+    script: string;
+    file_arg?: string;
+    item_name?: string;
+    value_type?: number;
+  }) =>
+    apiFetch<{ message: string; itemid: string }>("/items/script", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+
+  addDbOdbcItem: (payload: {
+    hostname: string;
+    dsn: string;
+    sql_query: string;
+    description: string;
+    item_name?: string;
+    value_type?: number;
+    username?: string;
+    password?: string;
+  }) =>
+    apiFetch<{ message: string; itemid: string }>("/items/db/odbc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+
+  addDbAgent2Item: (payload: {
+    hostname: string;
+    engine: string;
+    conn_string: string;
+    metric: string;
+    extra_param?: string;
+    item_name?: string;
+    value_type?: number;
+  }) =>
+    apiFetch<{ message: string; itemid: string }>("/items/db/agent2", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+
+  bulkAddItems: (payload: {
+    hostnames: string[];
+    item_type: string;
+    item_name?: string;
+    item_key?: string;
+    value_type?: number;
+    url?: string;
+    request_method?: number;
+    status_codes?: string;
+    timeout?: string;
+    verify_peer?: boolean;
+    follow_redirects?: boolean;
+    posts?: string;
+    service_type?: string;
+    port?: number | null;
+    script_type?: string;
+    script_mode?: string;
+    script?: string;
+    file_arg?: string;
+  }) =>
+    apiFetch<{ message: string; results: Array<{ hostname: string; item_id: string | null; error: string | null }> }>("/items/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+
+  bulkAddTriggers: (payload: {
+    hostnames: string[];
+    item_key: string;
+    trigger_name: string;
+    threshold: number;
+    operator?: string;
+    priority?: number;
+  }) =>
+    apiFetch<{ message: string; results: Array<{ hostname: string; trigger_id: string | null; error: string | null }> }>("/triggers/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+
   // ── Auth ─────────────────────────────────────────────────────────────
   login: (username: string, password: string) =>
     apiFetch<{
@@ -336,7 +499,7 @@ export const api = {
     ),
 
   me: () =>
-    apiFetch<{ sub: string; username: string; role: string; team_id: number | null }>("/auth/me"),
+    apiFetch<{ sub: string; username: string; roles: string[]; team_id: number | null }>("/auth/me"),
 
   // ── Teams ────────────────────────────────────────────────────────────
   getTeamsOverview: () => apiFetch<{ teams: Team[] }>("/teams/overview"),
@@ -451,14 +614,60 @@ export const api = {
     threshold: number;
     severity: number;
   }) => apiFetch<{ id: number }>("/alerts/rules", { method: "POST", body: JSON.stringify(data) }),
+  updateAlertRule: (
+    id: number,
+    data: {
+      operator: string;
+      threshold: number;
+      severity: number;
+      item_id?: string;
+      item_name?: string;
+      hostname?: string;
+    },
+  ) =>
+    apiFetch<{ message: string }>(`/alerts/rules/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
   deleteAlertRule: (id: number) =>
     apiFetch<{ message: string }>(`/alerts/rules/${id}`, { method: "DELETE" }),
   toggleAlertRule: (id: number) =>
     apiFetch<{ enabled: boolean }>(`/alerts/rules/${id}/toggle`, { method: "PATCH" }),
   getAlertEvents: (limit = 200) =>
     apiFetch<{ events: AlertEvent[] }>(`/alerts/events?limit=${limit}`),
-  acknowledgeProblem: (eventid: string) =>
-    apiFetch<{ message: string }>(`/metrics/problems/${encodeURIComponent(eventid)}/acknowledge`, {
-      method: "POST",
-    }),
+  acknowledgeProblem: (
+    eventid: string,
+    meta: { problem_name: string; hostname: string; severity: number; note: string },
+  ) =>
+    apiFetch<{ message: string; acknowledged_by: string }>(
+      `/metrics/problems/${encodeURIComponent(eventid)}/acknowledge`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(meta) },
+    ),
+  listAcknowledgements: (limit = 200) =>
+    apiFetch<{ acknowledgements: { id: number; eventid: string; problem_name: string; hostname: string; severity: number; acknowledged_by: string; note: string; acked_at: string }[] }>(
+      `/metrics/acknowledgements?limit=${limit}`,
+    ),
+  getProblemHistory: (params: { hours?: number; severityMin?: number; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (params.hours) q.set("hours", String(params.hours));
+    if (params.severityMin) q.set("severity_min", String(params.severityMin));
+    if (params.limit) q.set("limit", String(params.limit));
+    return apiFetch<{
+      problems: {
+        eventid: string;
+        name: string;
+        hostname: string;
+        severity: number;
+        severity_name: string;
+        clock: number;
+        r_clock: number;
+        resolved: boolean;
+        duration_seconds: number;
+        acknowledged: boolean;
+        ack_user: string | null;
+        ack_note: string;
+        ack_time: number | null;
+      }[];
+    }>(`/metrics/problems/history?${q}`);
+  },
 };

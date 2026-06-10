@@ -1,4 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server";
+import { logger } from "@/lib/logger";
 
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:6769";
 
@@ -24,8 +25,13 @@ const proxy = async (request: NextRequest, { params }: { params: Promise<{ path:
       body: body && body.byteLength > 0 ? body : undefined,
       cache: "no-store",
     });
-  } catch {
+  } catch (err) {
+    logger.error("Backend fetch failed: %s %s →", request.method, url, err);
     return NextResponse.json({ detail: "Backend unavailable" }, { status: 503 });
+  }
+
+  if (response.status >= 500) {
+    logger.error("Backend returned %d for %s %s", response.status, request.method, url);
   }
 
   const responseHeaders = new Headers();

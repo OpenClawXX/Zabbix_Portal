@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import type { PropsWithChildren } from "react";
-import { type AuthUser, clearToken, getToken, parseToken, setToken } from "../../lib/auth";
+import { type AuthUser, clearToken, getToken, setToken } from "../../lib/auth";
 import { api } from "../api";
 
 type AuthContextType = {
@@ -20,14 +20,21 @@ export const AuthProvider = ({ children }: PropsWithChildren) => {
 
   useEffect(() => {
     const token = getToken();
-    if (token) setUser(parseToken(token));
-    setLoading(false);
+    if (token) {
+      api.me()
+        .then((me) => setUser(me))
+        .catch(() => clearToken())
+        .finally(() => setLoading(false));
+    } else {
+      setLoading(false);
+    }
   }, []);
 
   const login = useCallback(async (username: string, password: string) => {
     const res = await api.login(username, password);
     setToken(res.access_token);
-    setUser(parseToken(res.access_token));
+    const me = await api.me();
+    setUser(me);
   }, []);
 
   const logout = useCallback(() => {

@@ -108,6 +108,17 @@ CREATE TABLE IF NOT EXISTS alert_events (
     severity     INTEGER NOT NULL,
     fired_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS problem_acknowledgements (
+    id              SERIAL PRIMARY KEY,
+    eventid         TEXT        NOT NULL,
+    problem_name    TEXT        NOT NULL DEFAULT '',
+    hostname        TEXT        NOT NULL DEFAULT '',
+    severity        INTEGER     NOT NULL DEFAULT 0,
+    acknowledged_by TEXT        NOT NULL,
+    note            TEXT        NOT NULL DEFAULT '',
+    acked_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 """
 
 _MIGRATIONS = """
@@ -143,6 +154,18 @@ BEGIN
     ALTER TABLE team_users DROP COLUMN role;
   END IF;
 END $$;
+
+ALTER TABLE alert_events ADD COLUMN IF NOT EXISTS item_id VARCHAR(64);
+
+CREATE INDEX IF NOT EXISTS idx_alert_rules_user_id    ON alert_rules(user_id);
+CREATE INDEX IF NOT EXISTS idx_alert_rules_enabled    ON alert_rules(enabled);
+CREATE INDEX IF NOT EXISTS idx_alert_events_user_id   ON alert_events(user_id);
+CREATE INDEX IF NOT EXISTS idx_alert_events_fired_at  ON alert_events(fired_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dashboard_layouts_owner ON dashboard_layouts(owner_type, owner_id, page);
+CREATE INDEX IF NOT EXISTS idx_problem_acks_eventid  ON problem_acknowledgements(eventid);
+CREATE INDEX IF NOT EXISTS idx_problem_acks_acked_at ON problem_acknowledgements(acked_at DESC);
+
+DELETE FROM alert_events WHERE fired_at < NOW() - INTERVAL '90 days';
 """
 
 

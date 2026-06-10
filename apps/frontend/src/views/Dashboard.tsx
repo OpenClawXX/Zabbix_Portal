@@ -936,12 +936,12 @@ const GraphConfigDialog = ({
     if (open) {
       setTitle(widget.customTitle ?? "");
       setLineColor(widget.lineColor ?? "");
-      setNewHostId("");
+      setNewHostId(widget.hostId ?? "");
       setNewGraphs([]);
       setNewGraphId("");
       api.listHosts().then((r) => setHosts(r.hosts)).catch(() => {});
     }
-  }, [open, widget.customTitle, widget.lineColor]);
+  }, [open, widget.customTitle, widget.lineColor, widget.hostId]);
 
   useEffect(() => {
     if (!newHostId) { setNewGraphs([]); setNewGraphId(""); return; }
@@ -963,6 +963,8 @@ const GraphConfigDialog = ({
       if (g) {
         updates.graphid = g.graphid;
         updates.graphName = g.name;
+        const host = g.hosts[0];
+        if (host) { updates.hostId = host.hostid; updates.hostName = host.host; }
         // Reset custom title when swapping to a new graph
         if (!title.trim()) updates.customTitle = undefined;
       }
@@ -989,6 +991,11 @@ const GraphConfigDialog = ({
             <Typography variant="body2" sx={{ fontWeight: 500 }}>
               {widget.customTitle ?? widget.graphName}
             </Typography>
+            {widget.hostName && (
+              <Typography variant="caption" color="text.secondary">
+                Host: {widget.hostName}
+              </Typography>
+            )}
           </Box>
           <TextField
             size="small"
@@ -1154,21 +1161,30 @@ const WidgetCard = ({
           }}
         >
           <DragIndicatorIcon sx={{ fontSize: 14, color: "text.disabled", flexShrink: 0 }} />
-          <Typography
-            variant="body2"
-            sx={{
-              fontWeight: 600,
-              fontSize: "0.8rem",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              ml: 0.5,
-              letterSpacing: "-0.01em",
-            }}
-            title={displayTitle}
-          >
-            {displayTitle}
-          </Typography>
+          <Box sx={{ flex: 1, minWidth: 0, ml: 0.5 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                fontWeight: 600,
+                fontSize: "0.8rem",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                letterSpacing: "-0.01em",
+              }}
+              title={displayTitle}
+            >
+              {displayTitle}
+            </Typography>
+            {widget.hostName && (
+              <Typography
+                variant="caption"
+                sx={{ fontSize: "0.65rem", color: "text.secondary", display: "block", lineHeight: 1 }}
+              >
+                {widget.hostName}
+              </Typography>
+            )}
+          </Box>
         </Box>
 
         {/* Controls — outside drag zone so clicks register */}
@@ -1309,6 +1325,8 @@ const GraphsTab = () => {
         i: `${graph.graphid}-${Date.now()}`,
         graphid: graph.graphid,
         graphName: graph.name,
+        hostId: graph.hosts[0]?.hostid,
+        hostName: graph.hosts[0]?.host,
         mode: "chartjs",
         periodIdx: 5,
         x: col,

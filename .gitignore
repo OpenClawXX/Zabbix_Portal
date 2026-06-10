@@ -24,9 +24,10 @@ htmlcov/
 .nyc_output/
 *.lcov
 
-# Node / pnpm
+# Node / Next.js
 node_modules/
 **/node_modules/
+apps/frontend/.next/
 apps/frontend/dist/
 apps/frontend/.vite/
 pnpm-lock.yaml.bak

@@ -124,6 +124,8 @@ export const Teams = () => {
   const [teamDialogOpen, setTeamDialogOpen] = useState(false);
   const [userDialogOpen, setUserDialogOpen] = useState(false);
   const [assignDialogTeamId, setAssignDialogTeamId] = useState<number | null>(null);
+  const [confirmDeleteUserId, setConfirmDeleteUserId] = useState<number | null>(null);
+  const [confirmDeleteTeamId, setConfirmDeleteTeamId] = useState<number | null>(null);
 
   // ── Form state ───────────────────────────────────────────────────────
   const [teamName, setTeamName] = useState("");
@@ -335,8 +337,8 @@ export const Teams = () => {
                 team={team}
                 canManage={isSuperadmin || (isAdmin && currentUser?.team_id === team.id)}
                 canDeleteTeam={isSuperadmin}
-                onDeleteTeam={handleDeleteTeam}
-                onDeleteUser={handleDeleteUser}
+                onDeleteTeam={(id) => setConfirmDeleteTeamId(id)}
+                onDeleteUser={(id) => setConfirmDeleteUserId(id)}
                 onChangePassword={(u) => {
                   setChangePwUser(u);
                   setNewPw("");
@@ -606,6 +608,44 @@ export const Teams = () => {
           <Button onClick={() => setChangePwUser(null)}>Cancel</Button>
           <Button variant="contained" onClick={handleChangePassword} disabled={!newPw.trim()}>
             Update
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── Confirm delete team ── */}
+      <Dialog open={confirmDeleteTeamId !== null} onClose={() => setConfirmDeleteTeamId(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700 }}>Delete team?</DialogTitle>
+        <DialogContent>
+          <Typography>This will permanently delete the team and remove all its host assignments. Users will not be deleted. This cannot be undone.</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmDeleteTeamId(null)}>Cancel</Button>
+          <Button color="error" variant="contained" onClick={async () => {
+            if (confirmDeleteTeamId === null) return;
+            await handleDeleteTeam(confirmDeleteTeamId);
+            setConfirmDeleteTeamId(null);
+          }}>Delete</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── Confirm remove user ── */}
+      <Dialog open={confirmDeleteUserId !== null} onClose={() => setConfirmDeleteUserId(null)}>
+        <DialogTitle>Remove user?</DialogTitle>
+        <DialogContent>
+          <Typography>This will remove the user from the portal. This action cannot be undone.</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmDeleteUserId(null)}>Cancel</Button>
+          <Button
+            color="error"
+            variant="contained"
+            onClick={async () => {
+              if (confirmDeleteUserId === null) return;
+              await handleDeleteUser(confirmDeleteUserId);
+              setConfirmDeleteUserId(null);
+            }}
+          >
+            Remove
           </Button>
         </DialogActions>
       </Dialog>

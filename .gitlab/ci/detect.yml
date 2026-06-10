@@ -17,7 +17,7 @@
 
 detect:
   extends: .base
-  image: alpine/git:2.43.0  # pinned — mutable :latest breaks reproducibility
+  image: $GIT_IMAGE  # pinned — mutable :latest breaks reproducibility
   stage: .pre
   variables:
     GIT_DEPTH: 0   # full history needed to find ancestor tags
@@ -83,7 +83,7 @@ detect:
     expire_in: 1 hour
   rules:
     - if: $CI_COMMIT_TAG
-    - if: $FORCE_BUILD  # allow manual force-deploy from any branch
+    - if: $FORCE_BUILD == "1"  # allow manual force-deploy from any branch
 
 # ── Variable validation ───────────────────────────────────────────────────────
 # Prints all pipeline variables at the start of every run so you can verify
@@ -93,7 +93,7 @@ validate:variables:
   extends: .base
   stage: .pre
   image:
-    name: alpine:3.20  # pinned — PRIVATE NETWORK: replace with your internal alpine image
+    name: $GIT_IMAGE  # pinned — PRIVATE NETWORK: replace with your internal alpine image
     entrypoint: [""]
   script:
     - |
@@ -111,25 +111,29 @@ validate:variables:
       echo "── Namespace ─────────────────────────────────────────"
       echo "  K8S_NAMESPACE        = $K8S_NAMESPACE"
 
-      # DELETED: ARTIFACTORY_REGISTRY block removed — registry is now hardcoded
-      # in python.yml (Kaniko --destination) and gitops.yml (helm --set image.repository).
-      # Replace <your-artifactory-registry> in those files with your actual registry path.
+      echo ""
+      echo "── Registry ──────────────────────────────────────────"
+      echo "  ARTIFACTORY_REGISTRY = $ARTIFACTORY_REGISTRY"
+
+      echo ""
+      echo "── Images ────────────────────────────────────────────"
+      echo "  RUNNER_TAG           = $RUNNER_TAG"
+      echo "  KANIKO_IMAGE         = $KANIKO_IMAGE"
+      echo "  PYTHON_IMAGE         = $PYTHON_IMAGE"
+      echo "  NODE_IMAGE           = $NODE_IMAGE"
+      echo "  HELM_IMAGE           = $HELM_IMAGE"
 
       echo ""
       echo "── Cluster servers ───────────────────────────────────"
       echo "  STAGING_SERVER       = $STAGING_SERVER"
       echo "  PROD_SERVER          = $PROD_SERVER"
+      echo "  DR_SERVER            = $DR_SERVER"
 
       echo ""
       echo "── Cluster tokens ────────────────────────────────────"
       echo "  STAGING_TOKEN        = $([ -n "$STAGING_TOKEN" ] && echo '*** (set)' || echo '!!! NOT SET')"
       echo "  PROD_TOKEN           = $([ -n "$PROD_TOKEN" ] && echo '*** (set)' || echo '!!! NOT SET')"
-
-      echo ""
-      echo "── Environment URLs ──────────────────────────────────"
-      echo "  STAGING_URL          = $STAGING_URL"
-      echo "  PRODUCTION_URL       = $PRODUCTION_URL"
-      echo "  DR_URL               = $DR_URL"
+      echo "  DR_TOKEN             = $([ -n "$DR_TOKEN" ] && echo '*** (set)' || echo '!!! NOT SET')"
 
       echo ""
       echo "══════════════════════════════════════════════════════"
@@ -138,8 +142,7 @@ validate:variables:
       # This surfaces misconfiguration early with a clear error instead of a
       # cryptic Helm auth failure or image-pull error later in the pipeline.
       MISSING=0
-      for VAR in K8S_NAMESPACE STAGING_SERVER PROD_SERVER STAGING_TOKEN PROD_TOKEN; do
-        # DELETED: ARTIFACTORY_REGISTRY removed from this list — registry is hardcoded
+      for VAR in RUNNER_TAG KANIKO_IMAGE PYTHON_IMAGE NODE_IMAGE HELM_IMAGE ARTIFACTORY_REGISTRY PROJECT_NAME K8S_NAMESPACE STAGING_SERVER PROD_SERVER DR_SERVER STAGING_TOKEN PROD_TOKEN DR_TOKEN; do
         eval "VAL=\${$VAR:-}"
         if [ -z "$VAL" ]; then
           echo "ERROR: required CI variable '$VAR' is not set."

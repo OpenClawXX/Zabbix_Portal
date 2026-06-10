@@ -78,21 +78,127 @@ class Metrics_Manager(Zabbix_Base):
             logger.error("get_problems failed: %r", e)
             return []
 
-    def acknowledge_problem(self, eventid: str, message: str = "Acknowledged via Zabbix Portal") -> bool:
+    def acknowledge_problem(self, eventid: str, username: str = "portal", note: str = "") -> bool:
         """Acknowledge a Zabbix problem event. Returns True on success."""
         if not self.zapi:
             return False
         try:
+            parts = [f"Acknowledged by {username} via Zabbix Portal"]
+            if note:
+                parts.append(note)
             # action bitmask: 2 = acknowledge, 4 = add message  →  6 = both
             self.zapi.event.acknowledge(
                 eventids=[eventid],
                 action=6,
-                message=message,
+                message=" — ".join(parts),
             )
             return True
         except Exception as e:
             logger.error("acknowledge_problem failed for eventid=%s: %r", eventid, e)
             return False
+
+    def get_problem_history(
+        self,
+        hours: int = 24,
+        hostname_filter: set[str] | None = None,
+        severity_min: int = 0,
+        limit: int = 500,
+    ) -> list[dict]:
+        """Return historical problems (active + resolved) for the given time window.
+
+        Uses event.get (value=1 = PROBLEM events) instead of problem.get because
+        problem.get with time_from/time_till only returns currently active problems
+        filtered by start time — resolved problems are absent. event.get queries
+        the events table directly and returns all problem events including resolved.
+        hostname_filter=None means no restriction (root/auditor).
+        """
+        if not self.zapi:
+            return []
+        try:
+            time_till = int(time.time())
+            time_from = time_till - hours * 3600
+            logger.debug("get_problem_history: hours=%d time_from=%d time_till=%d", hours, time_from, time_till)
+
+            events = self.zapi.event.get(
+                output=["eventid", "objectid", "severity", "name", "clock", "r_eventid", "acknowledged"],
+                source=0,   # trigger-generated
+                object=0,   # trigger objects
+                value=1,    # PROBLEM events only (not recovery)
+                time_from=time_from,
+                time_till=time_till,
+                sortfield="clock",
+                sortorder="DESC",
+                limit=limit,
+                selectAcknowledges="extend",  # "username" is not a valid ack field; use extend
+            )
+            logger.info("get_problem_history: event.get returned %d events", len(events) if events else 0)
+            if not events:
+                return []
+
+            # Fetch resolution times: r_eventid points to the recovery event; its
+            # clock is the resolution timestamp. Batch all non-zero r_eventids.
+            recovery_ids = [e["r_eventid"] for e in events if e.get("r_eventid", "0") != "0"]
+            recovery_clock: dict[str, int] = {}
+            if recovery_ids:
+                rec_events = self.zapi.event.get(
+                    eventids=recovery_ids,
+                    output=["eventid", "clock"],
+                )
+                recovery_clock = {r["eventid"]: int(r["clock"]) for r in rec_events}
+
+            trigger_ids = list({e["objectid"] for e in events})
+            triggers = self.zapi.trigger.get(
+                triggerids=trigger_ids,
+                output=["triggerid"],
+                selectHosts=["host"],
+            )
+            trigger_map = {t["triggerid"]: t for t in triggers}
+
+            now = int(time.time())
+            result = []
+            for e in events:
+                trigger = trigger_map.get(e["objectid"], {})
+                hosts = trigger.get("hosts", [])
+                if not hosts:
+                    continue
+                hostname = hosts[0]["host"]
+
+                if hostname_filter is not None and hostname not in hostname_filter:
+                    continue
+                if severity_min > 0 and int(e.get("severity", 0)) < severity_min:
+                    continue
+
+                clock = int(e["clock"])
+                r_eventid = e.get("r_eventid", "0")
+                r_clock = recovery_clock.get(r_eventid, 0) if r_eventid != "0" else 0
+                resolved = r_clock > 0
+                duration = (r_clock - clock) if resolved else (now - clock)
+
+                acks = e.get("acknowledges") or []
+                # "username" is not returned by event.get acknowledges; use userid as fallback
+                ack_user = acks[-1].get("username") or acks[-1].get("alias") or acks[-1].get("userid", "") if acks else None
+                ack_note = acks[-1].get("message", "") if acks else ""
+                ack_time = int(acks[-1].get("clock", 0)) if acks else None
+
+                result.append({
+                    "eventid": e["eventid"],
+                    "name": e.get("name", ""),
+                    "hostname": hostname,
+                    "severity": int(e.get("severity", 0)),
+                    "severity_name": SEVERITY_NAMES.get(str(e.get("severity", "0")), "Unknown"),
+                    "clock": clock,
+                    "r_clock": r_clock,
+                    "resolved": resolved,
+                    "duration_seconds": duration,
+                    "acknowledged": e.get("acknowledged") == "1",
+                    "ack_user": ack_user,
+                    "ack_note": ack_note,
+                    "ack_time": ack_time,
+                })
+            return result
+        except Exception as exc:
+            logger.error("get_problem_history failed: %r", exc)
+            return []
 
     def get_item_history(self, itemid: str, minutes: int = 360) -> dict:
         """Return time-series history for a single numeric item."""
@@ -161,5 +267,5 @@ class Metrics_Manager(Zabbix_Base):
                 "units": item.get("units", ""),
             }
         except Exception as e:
-            print(f"❌ get_item_history failed: {repr(e)}")
+            logger.error("get_item_history failed: %r", e)
             return {"history": [], "item_name": "", "units": ""}

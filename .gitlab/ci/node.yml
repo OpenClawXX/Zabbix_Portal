@@ -4,7 +4,7 @@
 
 .frontend_base:
   extends: .base
-  image: <your-node-image>  # PRIVATE NETWORK: replace with your internal Node image (e.g. your-registry/node:22-alpine)
+  image: $NODE_IMAGE
   needs:
     - job: detect
       artifacts: true
@@ -25,8 +25,10 @@ frontend:lint:
   allow_failure: true
   script:
     - |
-      [ "$FRONTEND_CHANGED" = "1" ] || { echo "Frontend unchanged — skipping lint."; exit 0; }
+      [ "$FRONTEND_CHANGED" = "1" ] || { echo "[$(date '+%H:%M:%S')] Frontend unchanged — skipping lint."; exit 0; }
+      echo "[$(date '+%H:%M:%S')] Running Biome lint..."
       npm run lint
+      echo "[$(date '+%H:%M:%S')] Lint passed."
   rules:
     - if: $CI_COMMIT_TAG
 
@@ -37,8 +39,10 @@ frontend:typecheck:
   allow_failure: true
   script:
     - |
-      [ "$FRONTEND_CHANGED" = "1" ] || { echo "Frontend unchanged — skipping typecheck."; exit 0; }
+      [ "$FRONTEND_CHANGED" = "1" ] || { echo "[$(date '+%H:%M:%S')] Frontend unchanged — skipping typecheck."; exit 0; }
+      echo "[$(date '+%H:%M:%S')] Running tsc type check..."
       npm run typecheck
+      echo "[$(date '+%H:%M:%S')] Type check passed."
   rules:
     - if: $CI_COMMIT_TAG
 
@@ -55,21 +59,24 @@ frontend:docker:build:
       optional: true
   script:
     - |
-      [ "$FRONTEND_CHANGED" = "1" ] || { echo "Frontend unchanged — skipping build."; exit 0; }
+      # Always write the env file so the artifact upload never fails on "no files to upload"
+      echo "FRONTEND_IMAGE_TAG=" > build-frontend.env
+      [ "$FRONTEND_CHANGED" = "1" ] || { echo "[$(date '+%H:%M:%S')] Frontend unchanged — skipping build."; exit 0; }
       IMAGE_TAG="${CI_COMMIT_TAG:-$CI_COMMIT_SHORT_SHA}"  # tag push → release tag; FORCE_BUILD from branch → short SHA
-      # DELETED: --destination used to be "$ARTIFACTORY_REGISTRY/frontend:$IMAGE_TAG"
-      # ARTIFACTORY_REGISTRY variable removed — registry is now hardcoded below.
-      # Replace <your-artifactory-registry> with your actual registry path.
+      echo "[$(date '+%H:%M:%S')] Building frontend image tag=$IMAGE_TAG..."
       /kaniko/executor \
         --use-new-run \
         --context "$CI_PROJECT_DIR/apps/frontend/" \
         --dockerfile "$CI_PROJECT_DIR/apps/frontend/Dockerfile" \
-        --destination "<your-artifactory-registry>/frontend:$IMAGE_TAG" \
+        --destination "$ARTIFACTORY_REGISTRY/frontend:$IMAGE_TAG" \
         --insecure-pull \
         --skip-tls-verify \
+        --snapshotMode=time \
+        --compressed-caching=false \
         --cache-ttl=1440h0m0s \
         --cache=true \
         --force
+      echo "[$(date '+%H:%M:%S')] Frontend image pushed: $ARTIFACTORY_REGISTRY/frontend:$IMAGE_TAG"
       echo "FRONTEND_IMAGE_TAG=$IMAGE_TAG" > build-frontend.env
   artifacts:
     reports:
@@ -77,4 +84,4 @@ frontend:docker:build:
     expire_in: 1 week
   rules:
     - if: $CI_COMMIT_TAG =~ /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)/
-    - if: $FORCE_BUILD  # allow manual force-build from any branch
+    - if: $FORCE_BUILD == "1"  # allow manual force-build from any branch

@@ -1,3 +1,4 @@
+import logging
 import os
 import time
 
@@ -5,13 +6,15 @@ import requests as _req
 
 from Zabbix_Base import Zabbix_Base
 
+logger = logging.getLogger(__name__)
+
 
 class Dashboard_Manager(Zabbix_Base):
     def __init__(self):
         super().__init__()
         self._web_session: _req.Session | None = None
         self._base_web_url: str = self._resolve_base_web_url()
-        print("Dashboard Manager ready.")
+        logger.info("Dashboard Manager ready.")
 
     # ── Web session (for proxying native Zabbix graph images) ─────────
 
@@ -40,7 +43,7 @@ class Dashboard_Manager(Zabbix_Base):
                 self._web_session = session
                 return session
         except Exception as e:
-            print(f"❌ Zabbix web login failed: {repr(e)}")
+            logger.error("Zabbix web login failed: %r", e)
         return None
 
     def _web(self) -> _req.Session | None:
@@ -64,7 +67,7 @@ class Dashboard_Manager(Zabbix_Base):
                 kwargs["hostids"] = [hostid]
             return self.zapi.graph.get(**kwargs)
         except Exception as e:
-            print(f"❌ get_graphs failed: {repr(e)}")
+            logger.error("get_graphs failed: %r", e)
             return []
 
     # ── Native graph image proxy ──────────────────────────────────────
@@ -95,7 +98,7 @@ class Dashboard_Manager(Zabbix_Base):
                 if resp.status_code == 200 and "image" in ct:
                     return resp.content
             except Exception as e:
-                print(f"❌ chart2.php request failed: {repr(e)}")
+                logger.error("chart2.php request failed: %r", e)
             return None
 
         session = self._web()
@@ -183,7 +186,7 @@ class Dashboard_Manager(Zabbix_Base):
                             for r in reversed(raw)
                         ]
                 except Exception as exc:
-                    print(f"❌ history.get failed for item {gi['itemid']}: {repr(exc)}")
+                    logger.error("history.get failed for item %s: %r", gi["itemid"], exc)
                     continue
                 color = gi.get("color", "3B82F6")
                 if color and not color.startswith("#"):
@@ -202,7 +205,7 @@ class Dashboard_Manager(Zabbix_Base):
                 "series": series,
             }
         except Exception as e:
-            print(f"❌ get_graph_data failed: {repr(e)}")
+            logger.error("get_graph_data failed: %r", e)
             return {"graph": {}, "series": []}
 
     # ── All-hosts metrics overview ────────────────────────────────────
@@ -270,7 +273,7 @@ class Dashboard_Manager(Zabbix_Base):
                 result.append(entry)
             return result
         except Exception as e:
-            print(f"❌ get_hosts_metrics failed: {repr(e)}")
+            logger.error("get_hosts_metrics failed: %r", e)
             return []
 
     # ── Recently created items ─────────────────────────────────────────
@@ -317,5 +320,5 @@ class Dashboard_Manager(Zabbix_Base):
                 )
             return result
         except Exception as e:
-            print(f"❌ get_recent_items failed: {repr(e)}")
+            logger.error("get_recent_items failed: %r", e)
             return []

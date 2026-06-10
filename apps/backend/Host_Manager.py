@@ -1,12 +1,15 @@
+import logging
 from Zabbix_Base import Zabbix_Base
 import openpyxl
 from io import BytesIO
+
+logger = logging.getLogger(__name__)
 
 
 class Host_Manager(Zabbix_Base):
     def __init__(self):
         super().__init__()
-        print("Host Manager ready.")
+        logger.info("Host Manager ready.")
 
     # ------------------------------------------------------------------
     # INTERNAL HELPERS
@@ -23,12 +26,12 @@ class Host_Manager(Zabbix_Base):
             return None
 
         if template_name is None:
-            print("❌ Template name is missing.")
+            logger.warning("get_template_id_from_name: template_name is missing.")
             return None
 
         template_name = str(template_name).strip()
         if not template_name:
-            print("❌ Template name is empty.")
+            logger.warning("get_template_id_from_name: template_name is empty.")
             return None
 
         # Try exact match by internal host name first
@@ -54,7 +57,7 @@ class Host_Manager(Zabbix_Base):
             )
 
         if not templates:
-            print(f"❌ Template '{template_name}' not found.")
+            logger.warning("Template %r not found.", template_name)
             return None
 
         q = template_name.casefold()
@@ -89,7 +92,7 @@ class Host_Manager(Zabbix_Base):
             results = self.zapi.template.get(output=["templateid", "name"], sortfield="name")
             return [{"templateid": t["templateid"], "name": t["name"]} for t in results]
         except Exception as e:
-            print(f"❌ Failed to list templates: {e}")
+            logger.error("list_templates failed: %r", e)
             return []
 
     # ------------------------------------------------------------------
@@ -101,7 +104,7 @@ class Host_Manager(Zabbix_Base):
     ):
         """Creates a host in Zabbix and links it to a template."""
         if not self.zapi:
-            print("❌ No API connection available.")
+            logger.error("create_server: no Zabbix API connection.")
             return None
 
         tid = self.get_template_id(template_name)
@@ -125,17 +128,17 @@ class Host_Manager(Zabbix_Base):
                 templates=[{"templateid": tid}],
             )
             host_id = result["hostids"][0]
-            print(f"✅ Created host: {hostname} (ID: {host_id})")
+            logger.info("Created host %r (ID: %s).", hostname, host_id)
             return host_id
 
         except Exception as e:
-            print(f"❌ Failed to create host '{hostname}': {repr(e)}")
+            logger.error("Failed to create host %r: %r", hostname, e)
             return None
 
     def delete_server(self, hostname):
         """Finds a host by name and deletes it from Zabbix."""
         if not self.zapi:
-            print("❌ No API connection.")
+            logger.error("delete_server: no Zabbix API connection.")
             return False
 
         try:
@@ -144,16 +147,16 @@ class Host_Manager(Zabbix_Base):
             )
 
             if not host_data:
-                print(f"⚠️ Host '{hostname}' not found.")
+                logger.warning("Host %r not found.", hostname)
                 return False
 
             host_id = host_data[0]["hostid"]
             self.zapi.host.delete([host_id])
-            print(f"🗑️ Deleted host: {hostname} (ID: {host_id})")
+            logger.info("Deleted host %r (ID: %s).", hostname, host_id)
             return True
 
         except Exception as e:
-            print(f"❌ Failed to delete host '{hostname}': {repr(e)}")
+            logger.error("Failed to delete host %r: %r", hostname, e)
             return False
 
     def get_hosts(self, team_name: str | None = None):
@@ -189,15 +192,53 @@ class Host_Manager(Zabbix_Base):
                     for h in hosts:
                         h["problem_count"] = counts.get(h["hostid"], 0)
                 except Exception as exc:
-                    print(f"⚠️ Could not fetch problem counts: {repr(exc)}")
+                    logger.warning("Could not fetch problem counts: %r", exc)
                     for h in hosts:
                         h["problem_count"] = 0
 
-            print(f"✅ Retrieved {len(hosts)} hosts.")
+            logger.debug("Retrieved %d hosts.", len(hosts))
             return hosts
         except Exception as e:
-            print(f"❌ Failed to retrieve hosts: {repr(e)}")
+            logger.error("get_hosts failed: %r", e)
             return []
+
+    def add_host_to_hostgroup(self, hostname: str, group_name: str) -> bool:
+        """Add host to a Zabbix host group without removing existing groups."""
+        if not self.zapi:
+            return False
+        try:
+            host_data = self.zapi.host.get(
+                filter={"host": hostname},
+                output=["hostid"],
+                **{"selectHostGroups" if self._zabbix_version >= (6, 2) else "selectGroups": "extend"},
+            )
+            if not host_data:
+                return False
+            host = host_data[0]
+            hg_key = "hostgroups" if self._zabbix_version >= (6, 2) else "groups"
+            existing_groups = [{"groupid": g["groupid"]} for g in host.get(hg_key, [])]
+
+            # Find or create the host group
+            hg = self.zapi.hostgroup.get(filter={"name": group_name}, output=["groupid"])
+            if not hg:
+                result = self.zapi.hostgroup.create(name=group_name)
+                group_id = result["groupids"][0]
+            else:
+                group_id = hg[0]["groupid"]
+
+            # Skip if already a member
+            if any(g["groupid"] == group_id for g in existing_groups):
+                return True
+
+            self.zapi.host.update(
+                hostid=host["hostid"],
+                groups=existing_groups + [{"groupid": group_id}],
+            )
+            logger.info("Added host %r to host group %r.", hostname, group_name)
+            return True
+        except Exception as e:
+            logger.error("add_host_to_hostgroup(%r, %r) failed: %r", hostname, group_name, e)
+            return False
 
     def tag_host(self, hostname: str, team_name: str) -> bool:
         """Add/replace the 'team' tag on a host, preserving all other tags."""
@@ -212,13 +253,39 @@ class Host_Manager(Zabbix_Base):
             if not host_data:
                 return False
             host = host_data[0]
-            tags = [t for t in host.get("tags", []) if t.get("tag") != "team"]
+            tags = [{"tag": t["tag"], "value": t.get("value", "")} for t in host.get("tags", []) if t.get("tag") != "team"]
             tags.append({"tag": "team", "value": team_name})
             self.zapi.host.update(hostid=host["hostid"], tags=tags)
             return True
         except Exception as e:
-            print(f"❌ Failed to tag host '{hostname}': {repr(e)}")
+            logger.error("tag_host(%r) failed: %r", hostname, e)
             return False
+
+    def update_host_tags(self, hostname: str, tags: list[dict]) -> tuple[bool, str | None]:
+        """Replace all non-team tags on a host with the supplied list.
+        The 'team' tag is always preserved and cannot be overwritten here.
+        Returns (success, error_message).
+        """
+        if not self.zapi:
+            return False, "Zabbix API not connected."
+        try:
+            host_data = self.zapi.host.get(
+                filter={"host": [hostname]},
+                output=["hostid"],
+                selectTags="extend",
+            )
+            if not host_data:
+                return False, f"Host '{hostname}' not found in Zabbix."
+            host = host_data[0]
+            # Only keep tag/value — Zabbix 7.x returns extra fields like "automatic" that host.update rejects
+            team_tags = [{"tag": t["tag"], "value": t.get("value", "")} for t in host.get("tags", []) if t.get("tag") == "team"]
+            custom_tags = [{"tag": t["tag"], "value": t.get("value", "")} for t in tags if t.get("tag") != "team"]
+            self.zapi.host.update(hostid=host["hostid"], tags=team_tags + custom_tags)
+            logger.info("Updated tags on host %r.", hostname)
+            return True, None
+        except Exception as e:
+            logger.error("update_host_tags(%r) failed: %r", hostname, e)
+            return False, str(e)
 
     def untag_host(self, hostname: str) -> bool:
         """Remove the 'team' tag from a host, preserving all other tags."""
@@ -233,11 +300,11 @@ class Host_Manager(Zabbix_Base):
             if not host_data:
                 return False
             host = host_data[0]
-            tags = [t for t in host.get("tags", []) if t.get("tag") != "team"]
+            tags = [{"tag": t["tag"], "value": t.get("value", "")} for t in host.get("tags", []) if t.get("tag") != "team"]
             self.zapi.host.update(hostid=host["hostid"], tags=tags)
             return True
         except Exception as e:
-            print(f"❌ Failed to untag host '{hostname}': {repr(e)}")
+            logger.error("untag_host(%r) failed: %r", hostname, e)
             return False
 
     def get_host_team(self, hostname: str) -> str | None:
@@ -257,13 +324,13 @@ class Host_Manager(Zabbix_Base):
                     return t.get("value")
             return None
         except Exception as e:
-            print(f"❌ get_host_team failed for '{hostname}': {repr(e)}")
+            logger.error("get_host_team(%r) failed: %r", hostname, e)
             return None
 
     def export_hosts_to_excel(self, file_path="zabbix_inventory.xlsx"):
         """Fetches all hosts and writes them to an Excel (.xlsx) file."""
         if not self.zapi:
-            print("❌ No API connection.")
+            logger.error("export_hosts_to_excel: no Zabbix API connection.")
             return None
 
         try:
@@ -273,17 +340,19 @@ class Host_Manager(Zabbix_Base):
 
             with open(file_path, "wb") as f:
                 f.write(excel_bytes)
-            print(f"✅ Exported hosts to {file_path}")
+            logger.info("Exported hosts to %r.", file_path)
             return file_path
 
         except Exception as e:
-            print(f"❌ Failed to export hosts: {repr(e)}")
+            logger.error("export_hosts_to_excel failed: %r", e)
             return None
 
-    def export_hosts_to_excel_bytes(self) -> bytes | None:
-        """Fetches all hosts and returns an Excel (.xlsx) as bytes (no disk write)."""
+    def export_hosts_to_excel_bytes(self, hostname_filter: set[str] | None = None) -> bytes | None:
+        """Fetches hosts and returns an Excel (.xlsx) as bytes (no disk write).
+        hostname_filter=None exports all hosts; pass a set to restrict to those hostnames.
+        """
         if not self.zapi:
-            print("❌ No API connection.")
+            logger.error("export_hosts_to_excel_bytes: no Zabbix API connection.")
             return None
 
         try:
@@ -291,6 +360,8 @@ class Host_Manager(Zabbix_Base):
                 output=["hostid", "host", "name", "status"],
                 selectInterfaces=["ip", "port"],
             )
+            if hostname_filter is not None:
+                hosts = [h for h in hosts if h["host"] in hostname_filter]
 
             wb = openpyxl.Workbook()
             ws = wb.active
@@ -317,5 +388,5 @@ class Host_Manager(Zabbix_Base):
             wb.save(buf)
             return buf.getvalue()
         except Exception as e:
-            print(f"❌ Failed to export hosts: {repr(e)}")
+            logger.error("export_hosts_to_excel_bytes failed: %r", e)
             return None

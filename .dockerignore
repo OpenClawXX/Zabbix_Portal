@@ -55,3 +55,9 @@ htmlcov/
 *.log
 .DS_Store
 Thumbs.db
+
+# Secrets — never bake into any image
+apps/backend/.env
+apps/backend/.env.*
+apps/frontend/.env
+apps/frontend/.env.*

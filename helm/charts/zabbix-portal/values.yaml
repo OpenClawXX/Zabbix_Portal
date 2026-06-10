@@ -34,7 +34,7 @@ backend:
   #     --from-literal=ZABBIX_USER=Admin \
   #     --from-literal=ZABBIX_PASS=... -n <namespace>
   existingSecret: "backend-secret"      # pre-existing Secret with: ZABBIX_USER, ZABBIX_PASS, SECRET_KEY (and optionally ZABBIX_URL, DATABASE_URL)
-  existingConfigMap: "backend-config"   # pre-existing ConfigMap with: ZABBIX_URL, DATABASE_URL
+  existingConfigMap: "zabbix-portal-backend-config"   # pre-existing ConfigMap with: ZABBIX_URL, DATABASE_URL
 
   env: {}
 
@@ -53,6 +53,8 @@ frontend:
   podSecurityContext: {}
 
   securityContext: {}
+
+  backendUrl: "http://<your-backend-service-name>:6769"  # replace with your actual backend service name
 
   route:
     enabled: true

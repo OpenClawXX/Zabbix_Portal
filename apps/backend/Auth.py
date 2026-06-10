@@ -10,7 +10,9 @@ from jose import JWTError, jwt
 
 load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
 
-_SECRET = os.getenv("SECRET_KEY", "change-me-in-production")
+_SECRET = os.getenv("SECRET_KEY")
+if not _SECRET:
+    raise RuntimeError("SECRET_KEY environment variable must be set before starting the server.")
 _ALG = "HS256"
 _HOURS = 8
 
@@ -55,7 +57,7 @@ def can_grant_roles(granter_roles: list[str], requested_roles: list[str]) -> boo
 
 
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=14)).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:

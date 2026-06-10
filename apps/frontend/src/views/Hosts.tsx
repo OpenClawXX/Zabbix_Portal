@@ -4,6 +4,7 @@ import CloudUploadOutlinedIcon from "@mui/icons-material/CloudUploadOutlined";
 import DeleteOutlineOutlinedIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import DownloadOutlinedIcon from "@mui/icons-material/DownloadOutlined";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import LocalOfferOutlinedIcon from "@mui/icons-material/LocalOfferOutlined";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import RouterOutlinedIcon from "@mui/icons-material/RouterOutlined";
 import {
@@ -122,6 +123,11 @@ export const Hosts = () => {
   const [hosts, setHosts] = useState<Host[]>([]);
   const [loading, setLoading] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<Host | null>(null);
+  const [tagHost, setTagHost] = useState<Host | null>(null);
+  const [editTags, setEditTags] = useState<Array<{ tag: string; value: string }>>([]);
+  const [tagSaving, setTagSaving] = useState(false);
+  const [newTagName, setNewTagName] = useState("");
+  const [newTagValue, setNewTagValue] = useState("");
   const [toast, setToast] = useState<{ open: boolean; message: string; severity: "success" | "error" }>({
     open: false, message: "", severity: "success",
   });
@@ -171,6 +177,46 @@ export const Hosts = () => {
       showToast(e instanceof Error ? e.message : String(e), "error");
     }
   }, [reload, showToast]);
+
+  const openTagEditor = useCallback((h: Host) => {
+    setEditTags((h.tags ?? []).filter((t) => t.tag !== "team"));
+    setNewTagName("");
+    setNewTagValue("");
+    setTagHost(h);
+  }, []);
+
+  const onSaveTags = async () => {
+    if (!tagHost) return;
+    const valid = editTags.filter((t) => t.tag.trim() !== "");
+    setTagSaving(true);
+    try {
+      await api.updateHostTags(tagHost.host, valid);
+      showToast("Tags updated.", "success");
+      setTagHost(null);
+      await reload();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e), "error");
+    } finally {
+      setTagSaving(false);
+    }
+  };
+
+  const deleteTagInline = useCallback(async (host: Host, tagToRemove: HostTag) => {
+    const remaining = (host.tags ?? []).filter(
+      (t) => t.tag !== "team" && !(t.tag === tagToRemove.tag && t.value === tagToRemove.value),
+    );
+    const teamTag = (host.tags ?? []).filter((t) => t.tag === "team");
+    setHosts((prev) =>
+      prev.map((h) => h.host === host.host ? { ...h, tags: [...teamTag, ...remaining] } : h),
+    );
+    try {
+      await api.updateHostTags(host.host, remaining);
+      await reload();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e), "error");
+      await reload();
+    }
+  }, [showToast, reload]);
 
   const onBulkUpload = async () => {
     if (!uploadFile) return;
@@ -295,6 +341,7 @@ export const Hosts = () => {
         renderHeader: () => <Typography sx={headerSx}>Tags</Typography>,
         renderCell: (params) => {
           const tags = (params.value as HostTag[] | undefined) ?? [];
+          const rowHost = params.row as Host;
           if (tags.length === 0)
             return <Typography variant="caption" color="text.disabled">—</Typography>;
           return (
@@ -304,13 +351,20 @@ export const Hosts = () => {
                   key={`${t.tag}:${t.value}`}
                   label={t.value ? `${t.tag}: ${t.value}` : t.tag}
                   size="small"
+                  onDelete={t.tag !== "team" ? () => { void deleteTagInline(rowHost, t); } : undefined}
                   sx={{
                     fontSize: "0.62rem",
-                    height: 18,
+                    height: 20,
                     bgcolor: isDark ? "rgba(59,130,246,0.12)" : "rgba(59,130,246,0.08)",
                     color: isDark ? "#93C5FD" : "#2563EB",
                     border: "none",
                     flexShrink: 0,
+                    "& .MuiChip-deleteIcon": {
+                      fontSize: "0.7rem",
+                      color: isDark ? "#93C5FD" : "#2563EB",
+                      opacity: 0.6,
+                      "&:hover": { opacity: 1 },
+                    },
                   }}
                 />
               ))}
@@ -335,23 +389,34 @@ export const Hosts = () => {
       {
         field: "actions",
         headerName: "",
-        width: 56,
+        width: 90,
         sortable: false,
         filterable: false,
         renderCell: (params) => (
-          <Tooltip title="Delete host" placement="left">
-            <IconButton
-              size="small"
-              onClick={() => setConfirmDelete(params.row as Host)}
-              sx={{ color: "text.disabled", "&:hover": { color: "error.main" } }}
-            >
-              <DeleteOutlineOutlinedIcon sx={{ fontSize: 17 }} />
-            </IconButton>
-          </Tooltip>
+          <Box sx={{ display: "flex", gap: 0.5 }}>
+            <Tooltip title="Edit tags" placement="left">
+              <IconButton
+                size="small"
+                onClick={() => openTagEditor(params.row as Host)}
+                sx={{ color: "text.disabled", "&:hover": { color: "primary.main" } }}
+              >
+                <LocalOfferOutlinedIcon sx={{ fontSize: 16 }} />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Delete host" placement="left">
+              <IconButton
+                size="small"
+                onClick={() => setConfirmDelete(params.row as Host)}
+                sx={{ color: "text.disabled", "&:hover": { color: "error.main" } }}
+              >
+                <DeleteOutlineOutlinedIcon sx={{ fontSize: 17 }} />
+              </IconButton>
+            </Tooltip>
+          </Box>
         ),
       },
     ],
-    [isDark],
+    [isDark, deleteTagInline],
   );
 
   const totalProblems = hosts.reduce((sum, h) => sum + (h.problem_count ?? 0), 0);
@@ -584,6 +649,99 @@ export const Hosts = () => {
           </Stack>
         </AccordionDetails>
       </Accordion>
+
+      {/* ── Tag editor dialog ── */}
+      <Dialog open={!!tagHost} onClose={() => setTagHost(null)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700 }}>
+          Edit tags — <Typography component="span" sx={{ fontFamily: "monospace", fontWeight: 600 }}>{tagHost?.host}</Typography>
+        </DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 0.5 }}>
+            {/* Chip area — team tag (read-only) + custom tags (deletable) */}
+            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, minHeight: 36, p: 1.5, border: "1px solid", borderColor: "divider", borderRadius: 1.5, bgcolor: "action.hover" }}>
+              {tagHost?.tags?.find((t) => t.tag === "team") && (
+                <Chip
+                  size="small"
+                  label={`team: ${tagHost.tags.find((t) => t.tag === "team")?.value ?? ""}`}
+                  sx={{ fontSize: "0.72rem", bgcolor: "action.selected", color: "text.secondary", cursor: "default" }}
+                />
+              )}
+              {editTags.map((t, i) => (
+                <Chip
+                  key={i}
+                  size="small"
+                  label={t.value ? `${t.tag}: ${t.value}` : t.tag}
+                  onDelete={() => setEditTags((prev) => prev.filter((_, j) => j !== i))}
+                  sx={{
+                    fontSize: "0.72rem",
+                    bgcolor: isDark ? "rgba(59,130,246,0.18)" : "rgba(59,130,246,0.12)",
+                    color: isDark ? "#93C5FD" : "#1D4ED8",
+                    "& .MuiChip-deleteIcon": { color: isDark ? "#93C5FD" : "#1D4ED8", opacity: 0.7, "&:hover": { opacity: 1 } },
+                  }}
+                />
+              ))}
+              {editTags.length === 0 && !tagHost?.tags?.some((t) => t.tag === "team") && (
+                <Typography variant="caption" color="text.disabled" sx={{ alignSelf: "center" }}>No tags yet</Typography>
+              )}
+            </Box>
+
+            <Divider />
+
+            {/* Add new tag row */}
+            <Stack direction="row" spacing={1} alignItems="center">
+              <TextField
+                size="small"
+                label="Tag name"
+                value={newTagName}
+                onChange={(e) => setNewTagName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newTagName.trim()) {
+                    setEditTags((prev) => [...prev, { tag: newTagName.trim(), value: newTagValue.trim() }]);
+                    setNewTagName("");
+                    setNewTagValue("");
+                  }
+                }}
+                sx={{ flex: 1 }}
+              />
+              <TextField
+                size="small"
+                label="Value"
+                value={newTagValue}
+                onChange={(e) => setNewTagValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newTagName.trim()) {
+                    setEditTags((prev) => [...prev, { tag: newTagName.trim(), value: newTagValue.trim() }]);
+                    setNewTagName("");
+                    setNewTagValue("");
+                  }
+                }}
+                sx={{ flex: 1 }}
+              />
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<AddIcon />}
+                disabled={!newTagName.trim()}
+                onClick={() => {
+                  setEditTags((prev) => [...prev, { tag: newTagName.trim(), value: newTagValue.trim() }]);
+                  setNewTagName("");
+                  setNewTagValue("");
+                }}
+                sx={{ flexShrink: 0 }}
+              >
+                Add
+              </Button>
+            </Stack>
+            <Typography variant="caption" color="text.disabled">Press Enter or click Add — then Save tags to apply.</Typography>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setTagHost(null)} disabled={tagSaving}>Cancel</Button>
+          <Button variant="contained" onClick={onSaveTags} disabled={tagSaving}>
+            {tagSaving ? "Saving…" : "Save tags"}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* ── Delete confirm dialog ── */}
       <Dialog open={!!confirmDelete} onClose={() => setConfirmDelete(null)} maxWidth="xs" fullWidth>

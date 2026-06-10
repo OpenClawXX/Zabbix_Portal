@@ -120,7 +120,7 @@ export const Login = () => {
                 fullWidth
                 autoFocus
                 autoComplete="username"
-                placeholder="admin"
+                placeholder="Admin"
                 size="small"
                 sx={{
                   "& .MuiOutlinedInput-root": {

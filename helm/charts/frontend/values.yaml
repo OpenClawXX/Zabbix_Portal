@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: frontend
-  tag: latest
+  tag: ""  # always set by CI via --set frontend.image.tag=$CI_COMMIT_TAG (gitops.yml)
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -21,19 +21,9 @@ podLabels: {}
 
 # OpenShift assigns a random UID at runtime; GID is always 0 (root group).
 # fsGroup: 0 ensures files copied in are readable by that GID.
-podSecurityContext:
-  fsGroup: 0
-  runAsNonRoot: true
+podSecurityContext: {}
 
-# No NET_BIND_SERVICE needed — next start runs on port 42069 (unprivileged).
-securityContext:
-  allowPrivilegeEscalation: false
-  capabilities:
-    drop:
-      - ALL
-  readOnlyRootFilesystem: true
-  runAsNonRoot: true
-  runAsUser: 1001
+securityContext: {}
 
 service:
   type: ClusterIP

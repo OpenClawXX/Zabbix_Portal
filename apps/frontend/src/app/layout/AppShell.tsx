@@ -14,7 +14,10 @@ import MusicNoteOutlinedIcon from "@mui/icons-material/MusicNoteOutlined";
 import NotificationsActiveOutlinedIcon from "@mui/icons-material/NotificationsActiveOutlined";
 import NotificationsNoneOutlinedIcon from "@mui/icons-material/NotificationsNoneOutlined";
 import PeopleOutlinedIcon from "@mui/icons-material/PeopleOutlined";
+import PlayArrowOutlinedIcon from "@mui/icons-material/PlayArrowOutlined";
+import StopOutlinedIcon from "@mui/icons-material/StopOutlined";
 import PlaylistAddOutlinedIcon from "@mui/icons-material/PlaylistAddOutlined";
+import UploadFileOutlinedIcon from "@mui/icons-material/UploadFileOutlined";
 import RefreshOutlinedIcon from "@mui/icons-material/RefreshOutlined";
 import ShowChartOutlinedIcon from "@mui/icons-material/ShowChartOutlined";
 import SpaceDashboardOutlinedIcon from "@mui/icons-material/SpaceDashboardOutlined";
@@ -22,6 +25,7 @@ import VolumeMuteOutlinedIcon from "@mui/icons-material/VolumeMuteOutlined";
 import VolumeUpOutlinedIcon from "@mui/icons-material/VolumeUpOutlined";
 import WarningAmberOutlinedIcon from "@mui/icons-material/WarningAmberOutlined";
 import {
+  Alert,
   Badge,
   Box,
   Chip,
@@ -44,8 +48,16 @@ import {
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { PropsWithChildren, ReactNode } from "react";
+import type { ChangeEvent, PropsWithChildren, ReactNode } from "react";
 import { type AlertEvent, type Problem, type StoredNotif, api } from "../api";
+import {
+  type CustomSound,
+  addSound,
+  deleteSound,
+  isCustomId,
+  listSounds,
+  playSoundById,
+} from "../../lib/soundLibrary";
 import { useAuth } from "../context/AuthContext";
 import { useThemeMode } from "../context/ThemeContext";
 
@@ -343,6 +355,7 @@ const NotificationCenter = ({
 }) => {
   const [tab, setTab] = useState(0);
   const [ackingId, setAckingId] = useState<string | null>(null);
+  const [ackError, setAckError] = useState<string | null>(null);
 
   const visibleHistory = history.filter((n) => n.clock > clearedBefore);
   const unreadEvents = visibleHistory.filter((n) => n.clock > lastReadClock);
@@ -596,6 +609,13 @@ const NotificationCenter = ({
         {/* ── Active Problems tab ── */}
         {tab === 1 && (
           <>
+            {ackError && (
+              <Box sx={{ px: 2, pt: 1 }}>
+                <Alert severity="error" onClose={() => setAckError(null)} sx={{ fontSize: "0.78rem" }}>
+                  {ackError}
+                </Alert>
+              </Box>
+            )}
             {loading ? (
               <Box sx={{ p: 2, display: "flex", flexDirection: "column", gap: 1 }}>
                 {[...Array(3)].map((_, i) => (
@@ -681,8 +701,14 @@ const NotificationCenter = ({
                               disabled={ackingId === p.eventid}
                               onClick={async () => {
                                 setAckingId(p.eventid);
-                                await onAcknowledge(p.eventid);
-                                setAckingId(null);
+                                setAckError(null);
+                                try {
+                                  await onAcknowledge(p.eventid);
+                                } catch (e) {
+                                  setAckError(e instanceof Error ? e.message : "Failed to acknowledge");
+                                } finally {
+                                  setAckingId(null);
+                                }
                               }}
                               sx={{
                                 mt: 0.5,
@@ -840,7 +866,9 @@ export const AppShell = ({ children }: PropsWithChildren) => {
     if (typeof window === "undefined") return DEFAULT_SOUND_PRESET;
     return localStorage.getItem("alertSoundPreset") ?? DEFAULT_SOUND_PRESET;
   });
+  const [customSounds, setCustomSounds] = useState<CustomSound[]>([]);
   const [soundMenuAnchor, setSoundMenuAnchor] = useState<null | HTMLElement>(null);
+  const customFileInputRef = useRef<HTMLInputElement>(null);
 
   const seenIds = useRef<Set<string>>(new Set());
   const seenEventIds = useRef<Set<number>>(new Set());
@@ -851,11 +879,90 @@ export const AppShell = ({ children }: PropsWithChildren) => {
   const soundPresetRef = useRef(soundPreset);
   soundPresetRef.current = soundPreset;
 
+  const reloadCustomSounds = useCallback(() => {
+    listSounds().then(setCustomSounds).catch(() => {});
+  }, []);
+
+  useEffect(() => { reloadCustomSounds(); }, [reloadCustomSounds]);
+
+  const [previewingKey, setPreviewingKey] = useState<string | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewCtxRef = useRef<AudioContext | null>(null);
+
+  const stopPreview = () => {
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current.currentTime = 0;
+      previewAudioRef.current = null;
+    }
+    if (previewCtxRef.current) { void previewCtxRef.current.close(); previewCtxRef.current = null; }
+    setPreviewingKey(null);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (previewAudioRef.current) { previewAudioRef.current.pause(); previewAudioRef.current = null; }
+      if (previewCtxRef.current) { void previewCtxRef.current.close(); previewCtxRef.current = null; }
+    };
+  }, []);
+
+  const handlePreview = (key: string) => {
+    if (previewingKey === key) { stopPreview(); return; }
+    stopPreview();
+    setPreviewingKey(key);
+    if (isCustomId(key)) {
+      playSoundById(key).then((audio) => {
+        if (!audio) { setPreviewingKey(null); return; }
+        previewAudioRef.current = audio;
+        audio.onended = () => { previewAudioRef.current = null; setPreviewingKey(null); };
+      }).catch(() => setPreviewingKey(null));
+    } else {
+      try {
+        const AudioCtx = window.AudioContext ??
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        if (!AudioCtx) { setPreviewingKey(null); return; }
+        const ctx = new AudioCtx();
+        previewCtxRef.current = ctx;
+        (SOUND_PRESETS[key] ?? SOUND_PRESETS[DEFAULT_SOUND_PRESET]).play(ctx, 3);
+        setTimeout(() => {
+          if (previewCtxRef.current === ctx) { void ctx.close(); previewCtxRef.current = null; setPreviewingKey(null); }
+        }, 2000);
+      } catch { setPreviewingKey(null); }
+    }
+  };
+
   const selectSoundPreset = (key: string) => {
     localStorage.setItem("alertSoundPreset", key);
     setSoundPreset(key);
     setSoundMenuAnchor(null);
-    playAlertSound(3, key); // preview the chosen sound
+    window.dispatchEvent(new Event("alertSoundPresetChanged"));
+    if (isCustomId(key)) {
+      void playSoundById(key);
+    } else {
+      playAlertSound(3, key);
+    }
+  };
+
+  const handleDeleteCustomSound = (id: string) => {
+    deleteSound(id).then(() => {
+      if (soundPreset === id) {
+        localStorage.setItem("alertSoundPreset", DEFAULT_SOUND_PRESET);
+        setSoundPreset(DEFAULT_SOUND_PRESET);
+        window.dispatchEvent(new Event("alertSoundPresetChanged"));
+      }
+      reloadCustomSounds();
+    }).catch(() => {});
+  };
+
+  const handleCustomFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const name = file.name.replace(/\.[^.]+$/, ""); // strip extension for display
+    addSound(name, file).then((id) => {
+      reloadCustomSounds();
+      selectSoundPreset(id);
+    }).catch(() => {});
+    e.target.value = "";
   };
 
   const dismissNotif = useCallback((eventid: string) => {
@@ -931,7 +1038,9 @@ export const AppShell = ({ children }: PropsWithChildren) => {
           );
           if (soundRef.current) {
             const maxSev = Math.max(...newProblems.map((p) => p.severity));
-            playAlertSound(maxSev, soundPresetRef.current);
+            const preset = soundPresetRef.current;
+            if (isCustomId(preset)) void playSoundById(preset);
+            else playAlertSound(maxSev, preset);
           }
         }
       } catch {
@@ -989,8 +1098,21 @@ export const AppShell = ({ children }: PropsWithChildren) => {
             })),
           );
           if (soundRef.current) {
-            const maxSev = Math.max(...newEvents.map((e: AlertEvent) => e.severity));
-            playAlertSound(maxSev, soundPresetRef.current);
+            const ruleSoundsMap: Record<string, string> = (() => {
+              try {
+                return JSON.parse(localStorage.getItem("alertRuleSounds") ?? "{}") as Record<string, string>;
+              } catch { return {}; }
+            })();
+            const topEvent = newEvents.reduce(
+              (best: AlertEvent, e: AlertEvent) => (e.severity > best.severity ? e : best),
+              newEvents[0],
+            );
+            const ruleSound = ruleSoundsMap[topEvent.rule_id] ?? "default";
+            if (ruleSound !== "none") {
+              const preset = ruleSound === "default" ? soundPresetRef.current : ruleSound;
+              if (isCustomId(preset)) void playSoundById(preset);
+              else playAlertSound(topEvent.severity, preset);
+            }
           }
         }
       } catch {
@@ -1238,19 +1360,16 @@ export const AppShell = ({ children }: PropsWithChildren) => {
             : "No problems"}
         </Typography>
         <Tooltip title="Notification sound">
-          <span>
-            <IconButton
-              size="small"
-              disabled={!soundEnabled}
-              onClick={(e) => {
-                e.stopPropagation();
-                setSoundMenuAnchor(e.currentTarget);
-              }}
-              sx={{ p: 0.25, color: "text.secondary", "&:hover": { color: "text.primary" } }}
-            >
-              <MusicNoteOutlinedIcon sx={{ fontSize: 15 }} />
-            </IconButton>
-          </span>
+          <IconButton
+            size="small"
+            onClick={(e) => {
+              e.stopPropagation();
+              setSoundMenuAnchor(e.currentTarget);
+            }}
+            sx={{ p: 0.25, color: "text.secondary", "&:hover": { color: "text.primary" } }}
+          >
+            <MusicNoteOutlinedIcon sx={{ fontSize: 15 }} />
+          </IconButton>
         </Tooltip>
         <Tooltip title={soundEnabled ? "Mute alerts" : "Unmute alerts"}>
           <IconButton
@@ -1283,11 +1402,55 @@ export const AppShell = ({ children }: PropsWithChildren) => {
               key={key}
               selected={key === soundPreset}
               onClick={() => selectSoundPreset(key)}
-              sx={{ fontSize: "0.8rem", gap: 1 }}
+              sx={{ fontSize: "0.8rem", display: "flex", justifyContent: "space-between", gap: 2, pr: 0.5 }}
             >
               {preset.label}
+              <IconButton
+                size="small"
+                onClick={(e) => { e.stopPropagation(); handlePreview(key); }}
+                sx={{ p: 0.25 }}
+              >
+                {previewingKey === key
+                  ? <StopOutlinedIcon sx={{ fontSize: "0.95rem" }} />
+                  : <PlayArrowOutlinedIcon sx={{ fontSize: "0.95rem" }} />}
+              </IconButton>
             </MenuItem>
           ))}
+          {customSounds.length > 0 && <Divider />}
+          {customSounds.map((s) => (
+            <MenuItem
+              key={s.id}
+              selected={s.id === soundPreset}
+              onClick={() => selectSoundPreset(s.id)}
+              sx={{ fontSize: "0.8rem", display: "flex", justifyContent: "space-between", gap: 1, pr: 0.5 }}
+            >
+              <Typography noWrap sx={{ fontSize: "0.8rem", maxWidth: 130, flex: 1 }}>{s.name}</Typography>
+              <IconButton
+                size="small"
+                onClick={(e) => { e.stopPropagation(); handlePreview(s.id); }}
+                sx={{ p: 0.25 }}
+              >
+                {previewingKey === s.id
+                  ? <StopOutlinedIcon sx={{ fontSize: "0.95rem" }} />
+                  : <PlayArrowOutlinedIcon sx={{ fontSize: "0.95rem" }} />}
+              </IconButton>
+              <IconButton
+                size="small"
+                onClick={(e) => { e.stopPropagation(); handleDeleteCustomSound(s.id); }}
+                sx={{ p: 0.25, color: "text.disabled", "&:hover": { color: "error.main" } }}
+              >
+                <CloseIcon sx={{ fontSize: "0.85rem" }} />
+              </IconButton>
+            </MenuItem>
+          ))}
+          <Divider />
+          <MenuItem
+            onClick={() => customFileInputRef.current?.click()}
+            sx={{ fontSize: "0.8rem", gap: 1, color: "text.secondary" }}
+          >
+            <UploadFileOutlinedIcon sx={{ fontSize: "1rem" }} />
+            Upload sound…
+          </MenuItem>
         </Menu>
       </Box>
 
@@ -1485,7 +1648,7 @@ export const AppShell = ({ children }: PropsWithChildren) => {
         onClearHistory={clearHistory}
         onRefresh={refreshCenter}
         onAcknowledge={async (id) => {
-          await api.acknowledgeProblem(id).catch(() => {});
+          await api.acknowledgeProblem(id, { problem_name: "", hostname: "", severity: 0, note: "" });
           acknowledgeInHistory(id);
           // Re-fetch problems so the Ack chip updates in Active Problems tab
           api
@@ -1494,6 +1657,15 @@ export const AppShell = ({ children }: PropsWithChildren) => {
             .catch(() => {});
         }}
         loading={centerLoading}
+      />
+
+      {/* Hidden file input for custom alert sound — must be outside the sidebar Box */}
+      <input
+        ref={customFileInputRef}
+        type="file"
+        accept="audio/*"
+        style={{ display: "none" }}
+        onChange={handleCustomFileChange}
       />
     </Box>
   );

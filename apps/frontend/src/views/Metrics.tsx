@@ -6,6 +6,10 @@ import "react-resizable/css/styles.css";
 import AddIcon from "@mui/icons-material/Add";
 import CloseIcon from "@mui/icons-material/Close";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
+import PlayArrowOutlinedIcon from "@mui/icons-material/PlayArrowOutlined";
+import StopOutlinedIcon from "@mui/icons-material/StopOutlined";
+import VolumeOffOutlinedIcon from "@mui/icons-material/VolumeOffOutlined";
 import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
 import NotificationsActiveOutlinedIcon from "@mui/icons-material/NotificationsActiveOutlined";
 import RefreshIcon from "@mui/icons-material/Refresh";
@@ -14,10 +18,12 @@ import ShowChartOutlinedIcon from "@mui/icons-material/ShowChartOutlined";
 import TuneIcon from "@mui/icons-material/Tune";
 import WarningAmberOutlinedIcon from "@mui/icons-material/WarningAmberOutlined";
 import {
+  Alert,
   Box,
   Button,
   Checkbox,
   Chip,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -62,7 +68,14 @@ import {
   Title,
 } from "chart.js";
 import ZoomPlugin from "chartjs-plugin-zoom";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAuth } from "../app/context/AuthContext";
+import {
+  type CustomSound,
+  isCustomId,
+  listSounds,
+  playSoundById,
+} from "../lib/soundLibrary";
 import { Line } from "react-chartjs-2";
 import ReactGridLayout, { WidthProvider } from "react-grid-layout";
 import {
@@ -1084,12 +1097,17 @@ const MetricWidgetCard = ({
 // ── Problems tab ──────────────────────────────────────────────────────
 
 const ProblemsTab = () => {
+  const { user: authUser } = useAuth();
   const [problems, setProblems] = useState<Problem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedSeverities, setSelectedSeverities] = useState<number[]>([]);
   const [hostFilter, setHostFilter] = useState("");
   const [hosts, setHosts] = useState<Host[]>([]);
   const [acknowledging, setAcknowledging] = useState<Set<string>>(new Set());
+
+  // Ack dialog state
+  const [ackTarget, setAckTarget] = useState<Problem | null>(null);
+  const [ackNote, setAckNote] = useState("");
 
   const loadProblems = useCallback(() => {
     setLoading(true);
@@ -1102,12 +1120,25 @@ const ProblemsTab = () => {
       .finally(() => setLoading(false));
   }, []);
 
-  const handleAcknowledge = useCallback(async (eventid: string) => {
+  const handleAcknowledge = useCallback(async (problem: Problem, note: string) => {
+    const { eventid } = problem;
     setAcknowledging((prev) => new Set([...prev, eventid]));
+    setAckTarget(null);
+    setAckNote("");
     try {
-      await api.acknowledgeProblem(eventid);
+      const res = await api.acknowledgeProblem(eventid, {
+        problem_name: problem.name,
+        hostname: problem.hostname,
+        severity: problem.severity,
+        note,
+      });
+      const now = new Date().toISOString();
       setProblems((prev) =>
-        prev.map((p) => (p.eventid === eventid ? { ...p, acknowledged: true } : p)),
+        prev.map((p) =>
+          p.eventid === eventid
+            ? { ...p, acknowledged: true, ack_user: res.acknowledged_by, ack_time: now, ack_note: note }
+            : p,
+        ),
       );
     } catch {
       // no-op — button re-enables so user can retry
@@ -1297,20 +1328,42 @@ const ProblemsTab = () => {
                   </TableCell>
                   <TableCell>
                     {p.acknowledged ? (
-                      <Chip
-                        label="Ack'd"
-                        size="small"
-                        color="success"
-                        variant="outlined"
-                        sx={{ height: 20, fontSize: "0.68rem" }}
-                      />
+                      <Tooltip
+                        title={
+                          p.ack_user ? (
+                            <Box>
+                              <Typography variant="caption" sx={{ display: "block", fontWeight: 700 }}>
+                                Acknowledged by {p.ack_user}
+                              </Typography>
+                              {p.ack_time && (
+                                <Typography variant="caption" sx={{ display: "block" }}>
+                                  {new Date(p.ack_time).toLocaleString()}
+                                </Typography>
+                              )}
+                              {p.ack_note && (
+                                <Typography variant="caption" sx={{ display: "block", fontStyle: "italic", mt: 0.25 }}>
+                                  "{p.ack_note}"
+                                </Typography>
+                              )}
+                            </Box>
+                          ) : "Acknowledged"
+                        }
+                      >
+                        <Chip
+                          label={p.ack_user ? `Ack'd by ${p.ack_user}` : "Ack'd"}
+                          size="small"
+                          color="success"
+                          variant="outlined"
+                          sx={{ height: 20, fontSize: "0.68rem" }}
+                        />
+                      </Tooltip>
                     ) : (
-                      <Tooltip title="Acknowledge this problem in Zabbix">
+                      <Tooltip title="Acknowledge this problem">
                         <span>
                           <Button
                             size="small"
                             variant="outlined"
-                            onClick={() => handleAcknowledge(p.eventid)}
+                            onClick={() => { setAckTarget(p); setAckNote(""); }}
                             disabled={acknowledging.has(p.eventid)}
                             sx={{ fontSize: "0.68rem", height: 20, minWidth: 50, px: 1 }}
                           >
@@ -1326,6 +1379,41 @@ const ProblemsTab = () => {
           </TableBody>
         </Table>
       </TableContainer>
+
+      {/* Acknowledge dialog */}
+      <Dialog open={ackTarget !== null} onClose={() => setAckTarget(null)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700 }}>Acknowledge problem</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ pt: 0.5 }}>
+            {ackTarget && (
+              <Box sx={{ bgcolor: "action.hover", borderRadius: 1, p: 1.5 }}>
+                <Typography variant="body2" sx={{ fontWeight: 600 }}>{ackTarget.name}</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {ackTarget.hostname} · {ackTarget.severity_name}
+                </Typography>
+              </Box>
+            )}
+            <Typography variant="body2" color="text.secondary">
+              Acknowledging as <strong>{authUser?.username ?? "you"}</strong>. Add an optional note explaining what was done.
+            </Typography>
+            <TextField
+              size="small" multiline minRows={2} fullWidth
+              label="Note (optional)"
+              placeholder="e.g. Restarted the service, investigating further…"
+              value={ackNote}
+              onChange={(e) => setAckNote(e.target.value)}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAckTarget(null)}>Cancel</Button>
+          <Button variant="contained" color="success"
+            disabled={ackTarget ? acknowledging.has(ackTarget.eventid) : false}
+            onClick={() => { if (ackTarget) handleAcknowledge(ackTarget, ackNote); }}>
+            Acknowledge
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };
@@ -1601,10 +1689,79 @@ type ItemDef2 = { itemid: string; name: string; key_: string };
 
 // ── Alert Rules tab ───────────────────────────────────────────────────
 
+// Minimal tone helper for in-page sound preview (mirrors AppShell logic)
+type OscType = "sine" | "square" | "triangle" | "sawtooth";
+const _tone = (
+  ctx: AudioContext,
+  opts: { freq: number; start: number; dur: number; type?: OscType; peak?: number },
+) => {
+  const g = ctx.createGain();
+  g.connect(ctx.destination);
+  const t0 = ctx.currentTime + opts.start;
+  g.gain.setValueAtTime(0, t0);
+  g.gain.linearRampToValueAtTime(opts.peak ?? 0.35, t0 + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.001, t0 + opts.dur);
+  const osc = ctx.createOscillator();
+  osc.type = opts.type ?? "sine";
+  osc.frequency.value = opts.freq;
+  osc.connect(g);
+  osc.start(t0);
+  osc.stop(t0 + opts.dur + 0.05);
+};
+
+const PREVIEW_SOUNDS: Record<string, (ctx: AudioContext) => void> = {
+  beep: (ctx) => { _tone(ctx, { freq: 740, start: 0, dur: 0.22 }); _tone(ctx, { freq: 740, start: 0.28, dur: 0.22 }); },
+  chime: (ctx) => [523, 659, 784].forEach((f, i) => _tone(ctx, { freq: f, start: i * 0.13, dur: 0.35, type: "triangle", peak: 0.3 })),
+  ping: (ctx) => _tone(ctx, { freq: 880, start: 0, dur: 0.5, type: "triangle", peak: 0.32 }),
+  alarm: (ctx) => [0, 1, 2, 3].forEach((i) => _tone(ctx, { freq: i % 2 ? 660 : 880, start: i * 0.16, dur: 0.13, type: "square", peak: 0.28 })),
+};
+
+const BUILTIN_SOUND_OPTIONS: { key: string; label: string }[] = [
+  { key: "default", label: "Default (global)" },
+  { key: "none", label: "No sound" },
+  { key: "beep", label: "Beep" },
+  { key: "chime", label: "Chime" },
+  { key: "ping", label: "Ping" },
+  { key: "alarm", label: "Alarm" },
+];
+
+const getRuleSounds = (): Record<string, string> => {
+  try {
+    return JSON.parse(localStorage.getItem("alertRuleSounds") ?? "{}");
+  } catch {
+    return {};
+  }
+};
+
+const setRuleSound = (ruleId: number, soundKey: string) => {
+  const sounds = getRuleSounds();
+  if (soundKey === "default") {
+    delete sounds[ruleId];
+  } else {
+    sounds[ruleId] = soundKey;
+  }
+  localStorage.setItem("alertRuleSounds", JSON.stringify(sounds));
+};
+
 const AlertRulesTab = () => {
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
+  const [ruleSounds, setRuleSoundsState] = useState<Record<string, string>>(getRuleSounds);
+
+  // Edit dialog state
+  const [editRule, setEditRule] = useState<AlertRule | null>(null);
+  const [editOperator, setEditOperator] = useState(">");
+  const [editThreshold, setEditThreshold] = useState("");
+  const [editSeverity, setEditSeverity] = useState(2);
+  const [editSound, setEditSound] = useState("default");
+  const [editHost, setEditHost] = useState("");
+  const [editItemId, setEditItemId] = useState("");
+  const [editItemName, setEditItemName] = useState("");
+  const [editItems, setEditItems] = useState<ItemDef2[]>([]);
+  const [editItemsLoading, setEditItemsLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [confirmDeleteRuleId, setConfirmDeleteRuleId] = useState<number | null>(null);
 
   // Add dialog state
   const [hosts, setHosts] = useState<Host[]>([]);
@@ -1616,7 +1773,77 @@ const AlertRulesTab = () => {
   const [operator, setOperator] = useState(">");
   const [threshold, setThreshold] = useState("");
   const [severity, setSeverity] = useState(2);
+  const [addSound, setAddSound] = useState("default");
   const [creating, setCreating] = useState(false);
+
+  const [customSounds, setCustomSounds] = useState<CustomSound[]>([]);
+  useEffect(() => { listSounds().then(setCustomSounds).catch(() => {}); }, []);
+
+  const [globalPreset, setGlobalPreset] = useState(
+    () => localStorage.getItem("alertSoundPreset") ?? "beep",
+  );
+  useEffect(() => {
+    const onPresetChange = () =>
+      setGlobalPreset(localStorage.getItem("alertSoundPreset") ?? "beep");
+    window.addEventListener("alertSoundPresetChanged", onPresetChange);
+    return () => window.removeEventListener("alertSoundPresetChanged", onPresetChange);
+  }, []);
+
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "alertRuleSounds") setRuleSoundsState(getRuleSounds());
+      if (e.key === "alertSoundPreset") setGlobalPreset(localStorage.getItem("alertSoundPreset") ?? "beep");
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  const soundOptions = useMemo(
+    () => [
+      ...BUILTIN_SOUND_OPTIONS,
+      ...customSounds.map((s) => ({ key: s.id, label: s.name })),
+    ],
+    [customSounds],
+  );
+
+  const [previewingKey, setPreviewingKey] = useState<string | null>(null);
+  const previewCtxRef = useRef<AudioContext | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  const handleSoundPreview = (previewKey: string, soundKey: string) => {
+    if (soundKey === "none") return;
+    // "default" means "use whatever the global preset is"
+    const effectiveKey = soundKey === "default"
+      ? (localStorage.getItem("alertSoundPreset") ?? "beep")
+      : soundKey;
+    if (effectiveKey === "none") return;
+    const stopCurrent = () => {
+      if (previewCtxRef.current) { void previewCtxRef.current.close(); previewCtxRef.current = null; }
+      if (previewAudioRef.current) { previewAudioRef.current.pause(); previewAudioRef.current = null; }
+    };
+    if (previewingKey === previewKey) { stopCurrent(); setPreviewingKey(null); return; }
+    stopCurrent();
+    setPreviewingKey(previewKey);
+    if (isCustomId(effectiveKey)) {
+      playSoundById(effectiveKey).then((audio) => {
+        if (!audio) { setPreviewingKey(null); return; }
+        previewAudioRef.current = audio;
+        audio.onended = () => { previewAudioRef.current = null; setPreviewingKey(null); };
+      }).catch(() => setPreviewingKey(null));
+    } else {
+      try {
+        const AudioCtx = window.AudioContext ??
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        if (!AudioCtx) { setPreviewingKey(null); return; }
+        const ctx = new AudioCtx();
+        previewCtxRef.current = ctx;
+        (PREVIEW_SOUNDS[effectiveKey] ?? PREVIEW_SOUNDS.beep)(ctx);
+        setTimeout(() => {
+          if (previewCtxRef.current === ctx) { void ctx.close(); previewCtxRef.current = null; setPreviewingKey(null); }
+        }, 2000);
+      } catch { setPreviewingKey(null); }
+    }
+  };
 
   const loadRules = useCallback(() => {
     setLoading(true);
@@ -1631,9 +1858,10 @@ const AlertRulesTab = () => {
     loadRules();
   }, [loadRules]);
 
-  // Reset dialog state when opened
+  // Reset add dialog state when opened; also refresh custom sounds in case new ones were uploaded
   useEffect(() => {
     if (!addOpen) return;
+    listSounds().then(setCustomSounds).catch(() => {});
     setSelectedHost("");
     setSelectedItemIds(new Set());
     setItems([]);
@@ -1641,8 +1869,38 @@ const AlertRulesTab = () => {
     setOperator(">");
     setThreshold("");
     setSeverity(2);
+    setAddSound("default");
     api.listHosts().then((r) => setHosts(r.hosts));
   }, [addOpen]);
+
+  // Populate edit dialog when a rule is selected; also refresh custom sounds
+  useEffect(() => {
+    if (!editRule) return;
+    listSounds().then(setCustomSounds).catch(() => {});
+    api.listHosts().then((r) => setHosts(r.hosts)).catch(() => {});
+    setEditOperator(editRule.operator);
+    setEditThreshold(String(editRule.threshold));
+    setEditSeverity(editRule.severity);
+    setEditSound(ruleSounds[editRule.id] ?? "default");
+    setEditHost(editRule.hostname);
+    setEditItemId(editRule.item_id);
+    setEditItemName(editRule.item_name);
+  }, [editRule, ruleSounds]);
+
+  // Reload items when editHost changes
+  useEffect(() => {
+    if (!editHost) { setEditItems([]); return; }
+    setEditItemsLoading(true);
+    api.listItems(editHost, true)
+      .then((r) => {
+        const numeric = r.items.filter(
+          (i: { value_type: string }) => i.value_type === "0" || i.value_type === "3",
+        );
+        setEditItems(numeric);
+      })
+      .catch(() => {})
+      .finally(() => setEditItemsLoading(false));
+  }, [editHost]);
 
   // Load numeric items when host is selected
   useEffect(() => {
@@ -1684,7 +1942,7 @@ const AlertRulesTab = () => {
     if (selectedItemIds.size === 0 || !threshold || !selectedHost) return;
     setCreating(true);
     try {
-      await Promise.all(
+      const results = await Promise.all(
         items
           .filter((i) => selectedItemIds.has(i.itemid))
           .map((i) =>
@@ -1698,6 +1956,12 @@ const AlertRulesTab = () => {
             }),
           ),
       );
+      if (addSound !== "default") {
+        const updated = getRuleSounds();
+        results.forEach((r) => { updated[r.id] = addSound; });
+        localStorage.setItem("alertRuleSounds", JSON.stringify(updated));
+        setRuleSoundsState({ ...updated });
+      }
       setAddOpen(false);
       loadRules();
     } finally {
@@ -1705,8 +1969,33 @@ const AlertRulesTab = () => {
     }
   };
 
+  const handleSave = async () => {
+    if (!editRule || !editThreshold || isNaN(parseFloat(editThreshold))) return;
+    setSaving(true);
+    try {
+      await api.updateAlertRule(editRule.id, {
+        operator: editOperator,
+        threshold: parseFloat(editThreshold),
+        severity: editSeverity,
+        item_id: editItemId,
+        item_name: editItemName,
+        hostname: editHost,
+      });
+      setRuleSound(editRule.id, editSound);
+      setRuleSoundsState(getRuleSounds());
+      setEditRule(null);
+      loadRules();
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleDelete = async (id: number) => {
     await api.deleteAlertRule(id);
+    const updated = getRuleSounds();
+    delete updated[id];
+    localStorage.setItem("alertRuleSounds", JSON.stringify(updated));
+    setRuleSoundsState({ ...updated });
     loadRules();
   };
 
@@ -1785,10 +2074,13 @@ const AlertRulesTab = () => {
                 <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 80 }}>
                   Status
                 </TableCell>
+                <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 110 }}>
+                  Sound
+                </TableCell>
                 <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 70 }}>
                   Active
                 </TableCell>
-                <TableCell sx={{ width: 48 }} />
+                <TableCell sx={{ width: 72 }} />
               </TableRow>
             </TableHead>
             <TableBody>
@@ -1851,6 +2143,41 @@ const AlertRulesTab = () => {
                         />
                       )}
                     </TableCell>
+                    <TableCell sx={{ whiteSpace: "nowrap" }}>
+                      {(() => {
+                        const sk = ruleSounds[r.id] ?? "default";
+                        const globalLabel = soundOptions.find((s) => s.key === globalPreset)?.label
+                          ?? globalPreset.charAt(0).toUpperCase() + globalPreset.slice(1);
+                        const label = sk === "default"
+                          ? `Default (${globalLabel})`
+                          : (soundOptions.find((s) => s.key === sk)?.label ?? sk);
+                        const canPreview = sk !== "none";
+                        const isPreviewing = previewingKey === `row-${r.id}`;
+                        return (
+                          <Box sx={{ display: "flex", alignItems: "center", gap: 0.25 }}>
+                            <Tooltip title={isPreviewing ? "Stop preview" : canPreview ? `Preview: ${label}` : label}>
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  disabled={!canPreview}
+                                  onClick={() => handleSoundPreview(`row-${r.id}`, sk)}
+                                  sx={{ color: isPreviewing ? "primary.main" : sk === "none" ? "text.disabled" : "text.secondary" }}
+                                >
+                                  {isPreviewing
+                                    ? <StopOutlinedIcon sx={{ fontSize: 15 }} />
+                                    : sk === "none"
+                                      ? <VolumeOffOutlinedIcon sx={{ fontSize: 15 }} />
+                                      : <PlayArrowOutlinedIcon sx={{ fontSize: 15 }} />}
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                            <Typography variant="caption" sx={{ fontSize: "0.68rem", color: "text.secondary" }}>
+                              {label}
+                            </Typography>
+                          </Box>
+                        );
+                      })()}
+                    </TableCell>
                     <TableCell>
                       <Switch
                         size="small"
@@ -1858,12 +2185,21 @@ const AlertRulesTab = () => {
                         onChange={() => handleToggle(r.id)}
                       />
                     </TableCell>
-                    <TableCell>
+                    <TableCell sx={{ px: 0.5, whiteSpace: "nowrap" }}>
+                      <Tooltip title="Edit rule">
+                        <IconButton
+                          size="small"
+                          onClick={() => setEditRule(r)}
+                          sx={{ color: "action.active", "&:hover": { color: "primary.main" } }}
+                        >
+                          <EditOutlinedIcon sx={{ fontSize: 16 }} />
+                        </IconButton>
+                      </Tooltip>
                       <Tooltip title="Delete rule">
                         <IconButton
                           size="small"
-                          onClick={() => handleDelete(r.id)}
-                          sx={{ color: "text.disabled", "&:hover": { color: "error.main" } }}
+                          onClick={() => setConfirmDeleteRuleId(r.id)}
+                          sx={{ color: "action.active", "&:hover": { color: "error.main" } }}
                         >
                           <DeleteOutlineIcon sx={{ fontSize: 16 }} />
                         </IconButton>
@@ -1952,6 +2288,38 @@ const AlertRulesTab = () => {
                     ))}
                 </Select>
               </FormControl>
+            </Box>
+
+            {/* Sound */}
+            <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+              <FormControl size="small" sx={{ flex: 1 }}>
+                <InputLabel>Alert sound</InputLabel>
+                <Select
+                  label="Alert sound"
+                  value={addSound}
+                  onChange={(e) => setAddSound(e.target.value)}
+                >
+                  {soundOptions.map((s) => (
+                    <MenuItem key={s.key} value={s.key}>
+                      {s.label}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <Tooltip title={previewingKey === "add" ? "Stop preview" : "Preview sound"}>
+                <span>
+                  <IconButton
+                    size="small"
+                    disabled={addSound === "none"}
+                    onClick={() => handleSoundPreview("add", addSound)}
+                    sx={{ color: previewingKey === "add" ? "primary.main" : "text.secondary" }}
+                  >
+                    {previewingKey === "add"
+                      ? <StopOutlinedIcon sx={{ fontSize: 18 }} />
+                      : <PlayArrowOutlinedIcon sx={{ fontSize: 18 }} />}
+                  </IconButton>
+                </span>
+              </Tooltip>
             </Box>
           </Box>
 
@@ -2071,6 +2439,162 @@ const AlertRulesTab = () => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Edit rule dialog */}
+      <Dialog open={!!editRule} onClose={() => setEditRule(null)} maxWidth="sm" fullWidth>
+        <DialogTitle
+          sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
+        >
+          <Typography fontWeight={700}>Edit Alert Rule</Typography>
+          <IconButton size="small" onClick={() => setEditRule(null)}>
+            <CloseIcon fontSize="small" />
+          </IconButton>
+        </DialogTitle>
+        <Divider />
+        <DialogContent>
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 2, pt: 1 }}>
+            {/* Host */}
+            <FormControl size="small" fullWidth>
+              <InputLabel>Host</InputLabel>
+              <Select
+                label="Host"
+                value={editHost}
+                onChange={(e) => {
+                  setEditHost(e.target.value);
+                  setEditItemId("");
+                  setEditItemName("");
+                }}
+              >
+                {hosts.map((h) => (
+                  <MenuItem key={h.hostid} value={h.host}>{h.host}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            {/* Item */}
+            <FormControl size="small" fullWidth disabled={!editHost || editItemsLoading}>
+              <InputLabel>{editItemsLoading ? "Loading…" : "Item"}</InputLabel>
+              <Select
+                label={editItemsLoading ? "Loading…" : "Item"}
+                value={editItemId}
+                onChange={(e) => {
+                  const selected = editItems.find((i) => i.itemid === e.target.value);
+                  if (selected) { setEditItemId(selected.itemid); setEditItemName(selected.name); }
+                }}
+              >
+                {editItems.map((i) => (
+                  <MenuItem key={i.itemid} value={i.itemid}>
+                    <Box>
+                      <Typography sx={{ fontSize: "0.82rem" }}>{i.name}</Typography>
+                      <Typography sx={{ fontSize: "0.7rem", color: "text.secondary", fontFamily: "monospace" }}>{i.key_}</Typography>
+                    </Box>
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <Box sx={{ display: "flex", gap: 1.5 }}>
+              <FormControl size="small" sx={{ width: 110 }}>
+                <InputLabel>Operator</InputLabel>
+                <Select
+                  label="Operator"
+                  value={editOperator}
+                  onChange={(e) => setEditOperator(e.target.value)}
+                >
+                  {([">", ">=", "<", "<="] as const).map((op) => (
+                    <MenuItem key={op} value={op} sx={{ fontFamily: "monospace" }}>
+                      {op}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <TextField
+                size="small"
+                label="Threshold"
+                type="number"
+                value={editThreshold}
+                onChange={(e) => setEditThreshold(e.target.value)}
+                sx={{ flex: 1 }}
+              />
+              <FormControl size="small" sx={{ minWidth: 130 }}>
+                <InputLabel>Severity</InputLabel>
+                <Select
+                  label="Severity"
+                  value={editSeverity}
+                  onChange={(e) => setEditSeverity(Number(e.target.value))}
+                >
+                  {Object.entries(SEV_LABELS)
+                    .sort((a, b) => Number(b[0]) - Number(a[0]))
+                    .map(([k, v]) => (
+                      <MenuItem key={k} value={Number(k)}>
+                        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                          <Box
+                            sx={{ width: 7, height: 7, borderRadius: "50%", bgcolor: v.color }}
+                          />
+                          {v.label}
+                        </Box>
+                      </MenuItem>
+                    ))}
+                </Select>
+              </FormControl>
+            </Box>
+            <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+              <FormControl size="small" sx={{ flex: 1 }}>
+                <InputLabel>Alert sound</InputLabel>
+                <Select
+                  label="Alert sound"
+                  value={editSound}
+                  onChange={(e) => setEditSound(e.target.value)}
+                >
+                  {soundOptions.map((s) => (
+                    <MenuItem key={s.key} value={s.key}>
+                      {s.label}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <Tooltip title={previewingKey === "edit" ? "Stop preview" : "Preview sound"}>
+                <span>
+                  <IconButton
+                    size="small"
+                    disabled={editSound === "none"}
+                    onClick={() => handleSoundPreview("edit", editSound)}
+                    sx={{ color: previewingKey === "edit" ? "primary.main" : "text.secondary" }}
+                  >
+                    {previewingKey === "edit"
+                      ? <StopOutlinedIcon sx={{ fontSize: 18 }} />
+                      : <PlayArrowOutlinedIcon sx={{ fontSize: 18 }} />}
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </Box>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEditRule(null)}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={handleSave}
+            disabled={!editThreshold || isNaN(parseFloat(editThreshold)) || saving}
+          >
+            {saving ? "Saving…" : "Save"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── Confirm delete alert rule ── */}
+      <Dialog open={confirmDeleteRuleId !== null} onClose={() => setConfirmDeleteRuleId(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700 }}>Delete alert rule?</DialogTitle>
+        <DialogContent>
+          <Typography>This will permanently remove the alert rule and its sound assignment. This cannot be undone.</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmDeleteRuleId(null)}>Cancel</Button>
+          <Button color="error" variant="contained" onClick={async () => {
+            if (confirmDeleteRuleId === null) return;
+            await handleDelete(confirmDeleteRuleId);
+            setConfirmDeleteRuleId(null);
+          }}>Delete</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };
@@ -2080,6 +2604,7 @@ const AlertRulesTab = () => {
 const NotificationsTab = () => {
   const [events, setEvents] = useState<AlertEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
   const [selectedSeverities, setSelectedSeverities] = useState<number[]>([]);
   const [hostFilter, setHostFilter] = useState("");
 
@@ -2087,8 +2612,8 @@ const NotificationsTab = () => {
     setLoading(true);
     api
       .getAlertEvents(500)
-      .then((r) => setEvents(r.events))
-      .catch(() => {})
+      .then((r) => { setFetchError(false); setEvents(r.events); })
+      .catch(() => setFetchError(true))
       .finally(() => setLoading(false));
   }, []);
 
@@ -2119,6 +2644,11 @@ const NotificationsTab = () => {
 
   return (
     <Box>
+      {fetchError && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setFetchError(false)}>
+          Failed to load alert events. Check your connection and try again.
+        </Alert>
+      )}
       {/* Header row */}
       <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 2, flexWrap: "wrap" }}>
         <NotificationsActiveOutlinedIcon sx={{ fontSize: 18, color: "text.secondary" }} />
@@ -2321,6 +2851,234 @@ const NotificationsTab = () => {
   );
 };
 
+// ── Problem History tab ───────────────────────────────────────────────
+
+type HistoryProblem = {
+  eventid: string;
+  name: string;
+  hostname: string;
+  severity: number;
+  severity_name: string;
+  clock: number;
+  r_clock: number;
+  resolved: boolean;
+  duration_seconds: number;
+  acknowledged: boolean;
+  ack_user: string | null;
+  ack_note: string;
+  ack_time: number | null;
+};
+
+const formatDuration = (seconds: number): string => {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86400) {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  }
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  return h > 0 ? `${d}d ${h}h` : `${d}d`;
+};
+
+const formatAbsTime = (clock: number): string =>
+  new Date(clock * 1000).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
+const TIME_RANGES = [
+  { label: "1h", hours: 1 },
+  { label: "6h", hours: 6 },
+  { label: "24h", hours: 24 },
+  { label: "7d", hours: 168 },
+  { label: "30d", hours: 720 },
+] as const;
+
+const ProblemHistoryTab = () => {
+  const [hours, setHours] = useState<number>(24);
+  const [severityMin, setSeverityMin] = useState(0);
+  const [search, setSearch] = useState("");
+  const [problems, setProblems] = useState<HistoryProblem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
+  const { palette } = useTheme();
+  const isDark = palette.mode === "dark";
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setFetchError(false);
+    api
+      .getProblemHistory({ hours, severityMin: severityMin > 0 ? severityMin : undefined })
+      .then((r) => setProblems(r.problems))
+      .catch(() => setFetchError(true))
+      .finally(() => setLoading(false));
+  }, [hours, severityMin]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return problems;
+    return problems.filter(
+      (p) => p.name.toLowerCase().includes(q) || p.hostname.toLowerCase().includes(q),
+    );
+  }, [problems, search]);
+
+  const rangeLabel = TIME_RANGES.find((r) => r.hours === hours)?.label ?? `${hours}h`;
+
+  return (
+    <Stack spacing={2}>
+      {/* Filters */}
+      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.5, alignItems: "center" }}>
+        <Box sx={{ display: "flex", gap: 0.5 }}>
+          {TIME_RANGES.map(({ label, hours: h }) => (
+            <Button
+              key={label}
+              size="small"
+              variant={hours === h ? "contained" : "outlined"}
+              onClick={() => setHours(h)}
+              sx={{ minWidth: 42, px: 1, fontSize: "0.75rem", textTransform: "none" }}
+            >
+              {label}
+            </Button>
+          ))}
+        </Box>
+        <FormControl size="small" sx={{ minWidth: 140 }}>
+          <InputLabel>Min severity</InputLabel>
+          <Select
+            value={severityMin}
+            label="Min severity"
+            onChange={(e) => setSeverityMin(Number(e.target.value))}
+          >
+            <MenuItem value={0}>All</MenuItem>
+            <MenuItem value={2}>Low+</MenuItem>
+            <MenuItem value={3}>Average+</MenuItem>
+            <MenuItem value={4}>High+</MenuItem>
+            <MenuItem value={5}>Disaster only</MenuItem>
+          </Select>
+        </FormControl>
+        <TextField
+          size="small"
+          placeholder="Filter by problem or host…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          sx={{ flex: 1, minWidth: 220 }}
+          InputProps={{
+            endAdornment: search ? (
+              <InputAdornment position="end">
+                <IconButton size="small" onClick={() => setSearch("")} edge="end">
+                  <CloseIcon sx={{ fontSize: 14 }} />
+                </IconButton>
+              </InputAdornment>
+            ) : undefined,
+          }}
+        />
+        <Tooltip title="Refresh">
+          <span>
+            <IconButton size="small" onClick={load} disabled={loading}>
+              <RefreshIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+      </Box>
+
+      {/* Summary */}
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+        {loading && <CircularProgress size={13} />}
+        <Typography variant="caption" color="text.secondary">
+          {loading
+            ? "Loading…"
+            : fetchError
+              ? "Failed to load — Zabbix may be unreachable"
+              : `${filtered.length} problem${filtered.length !== 1 ? "s" : ""} in the last ${rangeLabel}${search ? " (filtered)" : ""}`}
+        </Typography>
+      </Box>
+
+      {fetchError ? (
+        <Alert severity="warning">Could not load problem history. Check Zabbix connectivity.</Alert>
+      ) : (
+        <TableContainer component={Paper} variant="outlined">
+          <Table size="small">
+            <TableHead>
+              <TableRow sx={{ bgcolor: isDark ? "rgba(255,255,255,0.025)" : "rgba(0,0,0,0.025)" }}>
+                <TableCell sx={{ fontWeight: 700, fontSize: "0.72rem", width: 145 }}>Started</TableCell>
+                <TableCell sx={{ fontWeight: 700, fontSize: "0.72rem", width: 140 }}>Host</TableCell>
+                <TableCell sx={{ fontWeight: 700, fontSize: "0.72rem" }}>Problem</TableCell>
+                <TableCell sx={{ fontWeight: 700, fontSize: "0.72rem", width: 90 }}>Severity</TableCell>
+                <TableCell sx={{ fontWeight: 700, fontSize: "0.72rem", width: 110 }}>Status</TableCell>
+                <TableCell sx={{ fontWeight: 700, fontSize: "0.72rem", width: 80 }}>Duration</TableCell>
+                <TableCell sx={{ fontWeight: 700, fontSize: "0.72rem", width: 130 }}>Ack'd by</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {loading && problems.length === 0 ? (
+                Array.from({ length: 6 }).map((_, i) => (
+                  <TableRow key={i}>
+                    {[120, 120, 240, 70, 90, 60, 110].map((w, j) => (
+                      <TableCell key={j}><Skeleton width={w} height={14} /></TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : filtered.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={7} align="center" sx={{ py: 5 }}>
+                    <Typography variant="body2" color="text.disabled">No problems found in this window</Typography>
+                  </TableCell>
+                </TableRow>
+              ) : (
+                filtered.map((p) => (
+                  <TableRow key={p.eventid} sx={{ "&:hover": { bgcolor: "action.hover" } }}>
+                    <TableCell sx={{ fontSize: "0.78rem", fontFamily: "monospace", color: "text.secondary", whiteSpace: "nowrap" }}>
+                      {formatAbsTime(p.clock)}
+                    </TableCell>
+                    <TableCell>
+                      <Typography noWrap sx={{ fontSize: "0.82rem", fontWeight: 500, maxWidth: 130 }}>{p.hostname}</Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Typography noWrap sx={{ fontSize: "0.82rem", maxWidth: 320 }}>{p.name}</Typography>
+                    </TableCell>
+                    <TableCell><SeverityChip severity={p.severity} /></TableCell>
+                    <TableCell>
+                      {p.resolved ? (
+                        <Tooltip title={`Resolved ${formatAbsTime(p.r_clock)}`} placement="top">
+                          <Chip label="Resolved" size="small" sx={{ height: 18, fontSize: "0.63rem", bgcolor: isDark ? "rgba(22,163,74,0.18)" : "rgba(22,163,74,0.1)", color: "#16a34a", border: "none", cursor: "default" }} />
+                        </Tooltip>
+                      ) : (
+                        <Chip label="Active" size="small" sx={{ height: 18, fontSize: "0.63rem", bgcolor: isDark ? "rgba(239,68,68,0.2)" : "rgba(239,68,68,0.1)", color: "#ef4444", border: "none" }} />
+                      )}
+                    </TableCell>
+                    <TableCell sx={{ fontSize: "0.78rem", fontFamily: "monospace", color: "text.secondary" }}>
+                      {formatDuration(p.duration_seconds)}
+                    </TableCell>
+                    <TableCell>
+                      {p.acknowledged && p.ack_user ? (
+                        <Tooltip title={p.ack_note ? `"${p.ack_note}"` : "No note"} placement="top">
+                          <Typography variant="caption" sx={{ color: "primary.main", cursor: "default", textDecoration: "underline dotted" }}>
+                            {p.ack_user}
+                          </Typography>
+                        </Tooltip>
+                      ) : p.acknowledged ? (
+                        <Typography variant="caption" color="success.main">✓</Typography>
+                      ) : (
+                        <Typography variant="caption" color="text.disabled">—</Typography>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+    </Stack>
+  );
+};
+
 // ── Main export ───────────────────────────────────────────────────────
 
 export const Metrics = () => {
@@ -2336,7 +3094,7 @@ export const Metrics = () => {
           </Typography>
         </Box>
         <Typography color="text.secondary" sx={{ fontSize: "0.875rem" }}>
-          Active problems, alert notifications, item history charts, and custom alert rules
+          Active problems, alert notifications, item history charts, custom alert rules, and problem history search
         </Typography>
       </Box>
 
@@ -2358,12 +3116,17 @@ export const Metrics = () => {
           label="Alert Rules"
           sx={{ fontSize: "0.82rem", textTransform: "none", minHeight: 40 }}
         />
+        <Tab
+          label="History"
+          sx={{ fontSize: "0.82rem", textTransform: "none", minHeight: 40 }}
+        />
       </Tabs>
 
       {tab === 0 && <ProblemsTab />}
       {tab === 1 && <NotificationsTab />}
       {tab === 2 && <ItemHistoryTab />}
       {tab === 3 && <AlertRulesTab />}
+      {tab === 4 && <ProblemHistoryTab />}
     </Box>
   );
 };

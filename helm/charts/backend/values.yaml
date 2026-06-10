@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: backend
-  tag: latest
+  tag: ""  # always set by CI via --set backend.image.tag=$CI_COMMIT_TAG (gitops.yml)
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -23,18 +23,9 @@ podAnnotations: {}
 
 podLabels: {}
 
-podSecurityContext:
-  fsGroup: 1000
-  runAsNonRoot: true
+podSecurityContext: {}
 
-securityContext:
-  allowPrivilegeEscalation: false
-  capabilities:
-    drop:
-      - ALL
-  readOnlyRootFilesystem: true
-  runAsNonRoot: true
-  runAsUser: 1000
+securityContext: {}
 
 service:
   type: ClusterIP
@@ -56,8 +47,7 @@ autoscaling:
   # targetMemoryUtilizationPercentage: 80
 
 livenessProbe:
-  httpGet:
-    path: /health
+  tcpSocket:
     port: 6769
   initialDelaySeconds: 15
   periodSeconds: 20
@@ -65,8 +55,7 @@ livenessProbe:
   failureThreshold: 3
 
 readinessProbe:
-  httpGet:
-    path: /health
+  tcpSocket:
     port: 6769
   initialDelaySeconds: 5
   periodSeconds: 10
@@ -79,8 +68,16 @@ tolerations: []
 
 affinity: {}
 
-existingSecret: ""      # name of a pre-existing Secret to load env vars from (leave empty to use Helm-rendered secret below)
-existingConfigMap: ""   # name of a pre-existing ConfigMap to load env vars from (leave empty to use Helm-rendered configmap below)
+existingSecret: ""                # pre-existing Secret in OpenShift — Helm will not create a new one
+existingConfigMap: ""  # pre-existing ConfigMap in OpenShift — Helm will not create a new one
 
 # Secret values — pass via GitLab masked CI variables using --set at deploy time.
 # Never hardcode real values here.
+config: {}  # non-secret env vars injected via ConfigMap — add key: value pairs as needed
+
+secret:
+  zabbixUrl: ""       # --set secret.zabbixUrl=<your-zabbix-url>
+  zabbixUser: ""      # --set secret.zabbixUser=<your-zabbix-username>
+  zabbixPass: ""      # --set secret.zabbixPass=<your-zabbix-password>
+  secretKey: ""       # --set secret.secretKey=<your-jwt-secret-key>
+  databaseUrl: ""     # --set secret.databaseUrl=<your-database-url>

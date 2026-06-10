@@ -3,6 +3,7 @@ import { CssBaseline, ThemeProvider } from "@mui/material";
 import { usePathname } from "next/navigation";
 import { useMemo } from "react";
 import type { PropsWithChildren } from "react";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AuthProvider } from "./context/AuthContext";
 import { SyncProvider } from "./context/SyncContext";
 import { ThemeModeProvider, useThemeMode } from "./context/ThemeContext";
@@ -18,7 +19,9 @@ const ThemedApp = ({ children }: PropsWithChildren) => {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      {isLogin ? children : <AppShell>{children}</AppShell>}
+      <ErrorBoundary>
+        {isLogin ? children : <AppShell>{children}</AppShell>}
+      </ErrorBoundary>
     </ThemeProvider>
   );
 };

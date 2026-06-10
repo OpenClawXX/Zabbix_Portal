@@ -1,25 +1,41 @@
 # =============================================================================
 # GitOps — Helm validation + deploy.
 # =============================================================================
-# Tag-only release pipeline. On every tag:
-#   1. Apps that changed since the previous tag get rebuilt and pushed.
-#   2. deploy:staging auto-deploys to the staging cluster.
-#   3. deploy:production is a manual gate.
-#   4. deploy:dr is a manual gate.
+# Each environment is split into two separate jobs visible in the pipeline UI:
+#
+#   plan:<env>   — Phases 1-3: validate, resolve image tags, print values files
+#                  and deployment decision. Fast (seconds). Safe to re-run.
+#   deploy:<env> — Phase 4: helm upgrade using the computed plan. Requires
+#                  plan:<env> to have succeeded first.
+#                  staging: auto  |  production/dr: manual gate.
+#
+# Artifact chain — each plan job writes a dotenv file consumed by the next job:
+#
+#   plan:staging    → staging-plan.env
+#       FINAL_BACKEND_TAG, FINAL_FRONTEND_TAG, NO_CHANGES  (for deploy:staging)
+#       STAGING_BACKEND_TAG, STAGING_FRONTEND_TAG          (for plan:production fallback)
+#
+#   deploy:staging  reads staging-plan.env
+#
+#   plan:production → production-plan.env
+#       FINAL_BACKEND_TAG, FINAL_FRONTEND_TAG, NO_CHANGES  (for deploy:production)
+#       PRODUCTION_BACKEND_TAG, PRODUCTION_FRONTEND_TAG    (for plan:dr fallback)
+#
+#   deploy:production reads production-plan.env
+#
+#   plan:dr         → dr-plan.env
+#       FINAL_BACKEND_TAG, FINAL_FRONTEND_TAG, NO_CHANGES  (for deploy:dr)
+#
+#   deploy:dr       reads dr-plan.env
 #
 # Namespaces are pre-created in OpenShift — this pipeline does not create them.
-# Set K8S_NAMESPACE in GitLab Settings → CI/CD → Variables to point to the
-# existing namespace for this project.
 # =============================================================================
 
 .helm_base:
   extends: .base
   image:
-    name: <your-helm-image>  # PRIVATE NETWORK: replace with your internal image that has the helm CLI installed (e.g. your-registry/helm:latest)
+    name: $HELM_IMAGE
     entrypoint: [""]
-  needs:
-    - job: detect
-      artifacts: true
   before_script:
     - helm version
     - helm dependency build "helm/charts/$PROJECT_NAME/"
@@ -28,13 +44,18 @@
 helm:lint:
   extends: .helm_base
   stage: lint
+  needs:
+    - job: detect
+      artifacts: true
   script:
     - |
-      [ "$HELM_CHANGED" = "1" ] || { echo "Helm unchanged — skipping lint."; exit 0; }
+      [ "$HELM_CHANGED" = "1" ] || { echo "[$(date '+%d/%m/%Y %H:%M:%S')] Helm unchanged — skipping lint."; exit 0; }
+      echo "[$(date '+%d/%m/%Y %H:%M:%S')] Running helm lint on all charts..."
       for chart in "helm/charts"/*/; do
-        echo "── helm lint $chart"
+        echo "[$(date '+%d/%m/%Y %H:%M:%S')]   helm lint $chart"
         helm lint "$chart"
       done
+      echo "[$(date '+%d/%m/%Y %H:%M:%S')] Lint passed."
   rules:
     - if: $CI_COMMIT_TAG
 
@@ -42,294 +63,422 @@ helm:lint:
 helm:template:
   extends: .helm_base
   stage: lint
-  script:
-    - |
-      [ "$HELM_CHANGED" = "1" ] || { echo "Helm unchanged — skipping template check."; exit 0; }
-      helm template "$PROJECT_NAME" "helm/charts/$PROJECT_NAME/" --debug > /dev/null
-  rules:
-    - if: $CI_COMMIT_TAG
-
-# ── Deploy shared setup ───────────────────────────────────────────────────────
-.deploy_base:
-  extends: .helm_base
   needs:
     - job: detect
       artifacts: true
-    - job: backend:docker:build
-      optional: true
-    - job: frontend:docker:build
-      optional: true
+  script:
+    - |
+      [ "$HELM_CHANGED" = "1" ] || { echo "[$(date '+%d/%m/%Y %H:%M:%S')] Helm unchanged — skipping template check."; exit 0; }
+      echo "[$(date '+%d/%m/%Y %H:%M:%S')] Running helm template validation..."
+      helm template "$PROJECT_NAME" "helm/charts/$PROJECT_NAME/" --debug > /dev/null
+      echo "[$(date '+%d/%m/%Y %H:%M:%S')] Template check passed."
+  rules:
+    - if: $CI_COMMIT_TAG
 
-.deploy_script: &deploy_script |
-  set -ex
+# =============================================================================
+# Shared scripts (YAML anchors)
+# =============================================================================
 
-  # On a tag push CI_COMMIT_TAG is the release tag (e.g. v1.2.3).
-  # On a FORCE_BUILD from a branch CI_COMMIT_TAG is empty — fall back to the short SHA
-  # so images are always tagged with something meaningful.
+# ── Plan script (Phases 1-3) ──────────────────────────────────────────────────
+# Injected CI variables from dotenv artifacts:
+#   BACKEND_CHANGED, FRONTEND_CHANGED, HELM_CHANGED        — from detect
+#   STAGING_BACKEND_TAG, STAGING_FRONTEND_TAG              — from plan:staging (production only)
+#   PRODUCTION_BACKEND_TAG, PRODUCTION_FRONTEND_TAG        — from plan:production (dr only)
+# Job-level variables required:
+#   DEPLOY_ENV, VALUES_FILE, DEPLOY_NAMESPACE, HELM_KUBEAPISERVER, HELM_KUBETOKEN
+.plan_script: &plan_script |
+  set -e
+
+  _ts()     { date '+%d/%m/%Y %H:%M:%S'; }
+  log()     { echo "[$(_ts)] $*"; }
+  ok()      { echo "[$(_ts)] OK  $*"; }
+  fail()    { echo "[$(_ts)] ERR $*" >&2; exit 1; }
+  section() {
+    echo ""
+    echo "[$(_ts)] ══════════════════════════════════════════════════"
+    echo "[$(_ts)]   $*"
+    echo "[$(_ts)] ══════════════════════════════════════════════════"
+  }
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 1/3 — Environment Setup
+  # ═══════════════════════════════════════════════════════════════════════════
+  section "PLAN [${DEPLOY_ENV}]  1/3 — Environment Setup"
+
   IMAGE_TAG="${CI_COMMIT_TAG:-$CI_COMMIT_SHORT_SHA}"
-  if [ -z "$IMAGE_TAG" ]; then
-    echo "ERROR: cannot determine image tag — CI_COMMIT_TAG and CI_COMMIT_SHORT_SHA are both empty."
-    exit 1
-  fi
+  [ -n "$IMAGE_TAG" ] || fail "Cannot determine image tag — CI_COMMIT_TAG and CI_COMMIT_SHORT_SHA are both empty."
 
-  echo "── Deploying to environment: $DEPLOY_ENV ────────────────"
-  echo "   Tag       : $IMAGE_TAG"
-  echo "   Namespace : $DEPLOY_NAMESPACE"
-  echo "   Cluster   : $HELM_KUBEAPISERVER"
-  echo "──────────────────────────────────────────────────────────"
+  log "Environment    : $DEPLOY_ENV"
+  log "Image tag      : $IMAGE_TAG"
+  log "Namespace      : $DEPLOY_NAMESPACE"
+  log "Cluster API    : $HELM_KUBEAPISERVER"
+  log "Chart          : helm/charts/$PROJECT_NAME/"
+  log "Base values    : helm/charts/$PROJECT_NAME/values.yaml"
+  log "Env values     : helm/charts/$PROJECT_NAME/$VALUES_FILE"
+  log "Changed flags  : backend=$BACKEND_CHANGED  frontend=$FRONTEND_CHANGED  helm=$HELM_CHANGED"
+  ok "Phase 1 complete."
 
-  # Resolve the last successfully deployed image tag for each app.
-  # Scan good revisions (deployed/superseded) newest → oldest until both tags are found.
-  DEPLOYED_BACKEND_TAG=""
-  DEPLOYED_FRONTEND_TAG=""
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 2/3 — Tag Resolution (Helm history + cross-env promotion fallback)
+  # ═══════════════════════════════════════════════════════════════════════════
+  section "PLAN [${DEPLOY_ENV}]  2/3 — Tag Resolution"
 
+  RESOLVED_BACKEND_TAG=""
+  RESOLVED_FRONTEND_TAG=""
+
+  log "Scanning Helm history for release '$PROJECT_NAME' in '$DEPLOY_NAMESPACE'..."
   GOOD_REVISIONS=$(helm history "$PROJECT_NAME" -n "$DEPLOY_NAMESPACE" --max 50 2>/dev/null \
     | grep -E '\s(deployed|superseded)\s' \
     | awk '{print $1}' | sort -rn || true)
 
   if [ -z "$GOOD_REVISIONS" ]; then
-    echo "── No previous successful deployment found — treating as first deploy."
+    log "No previous successful revision found — treating as first deploy."
   else
+    log "Eligible revisions (newest first): $(echo "$GOOD_REVISIONS" | tr '\n' ' ')"
     for REV in $GOOD_REVISIONS; do
-      if [ -n "$DEPLOYED_BACKEND_TAG" ] && [ -n "$DEPLOYED_FRONTEND_TAG" ]; then
-        break
-      fi
-      echo "── Checking Helm revision $REV ────────────────────────────"
+      [ -n "$RESOLVED_BACKEND_TAG" ] && [ -n "$RESOLVED_FRONTEND_TAG" ] && break
+      log "  Checking revision $REV..."
       REV_VALUES=$(helm get values "$PROJECT_NAME" -n "$DEPLOY_NAMESPACE" \
         --revision "$REV" 2>/dev/null || true)
-      if [ -z "$DEPLOYED_BACKEND_TAG" ]; then
-        DEPLOYED_BACKEND_TAG=$(printf '%s\n' "$REV_VALUES" | awk '
-          /^[^ ]/       { s=0 }
-          /^backend:/   { s=1 }
-          s==1 && /^  image:/  { s=2 }
-          s==2 && /^    tag:/  { gsub(/"/,"",$2); if ($2!="") { print $2; exit } }
+      if [ -z "$RESOLVED_BACKEND_TAG" ]; then
+        RESOLVED_BACKEND_TAG=$(printf '%s\n' "$REV_VALUES" | awk '
+          /^[^ ]/      { s=0 }
+          /^backend:/  { s=1 }
+          s==1 && /^  image:/ { s=2 }
+          s==2 && /^    tag:/ { gsub(/"/,"",$2); if ($2!="") { print $2; exit } }
         ')
+        [ -n "$RESOLVED_BACKEND_TAG" ]  && log "    backend tag from rev $REV: $RESOLVED_BACKEND_TAG"
       fi
-      if [ -z "$DEPLOYED_FRONTEND_TAG" ]; then
-        DEPLOYED_FRONTEND_TAG=$(printf '%s\n' "$REV_VALUES" | awk '
-          /^[^ ]/        { s=0 }
-          /^frontend:/   { s=1 }
-          s==1 && /^  image:/  { s=2 }
-          s==2 && /^    tag:/  { gsub(/"/,"",$2); if ($2!="") { print $2; exit } }
+      if [ -z "$RESOLVED_FRONTEND_TAG" ]; then
+        RESOLVED_FRONTEND_TAG=$(printf '%s\n' "$REV_VALUES" | awk '
+          /^[^ ]/       { s=0 }
+          /^frontend:/  { s=1 }
+          s==1 && /^  image:/ { s=2 }
+          s==2 && /^    tag:/ { gsub(/"/,"",$2); if ($2!="") { print $2; exit } }
         ')
+        [ -n "$RESOLVED_FRONTEND_TAG" ] && log "    frontend tag from rev $REV: $RESOLVED_FRONTEND_TAG"
       fi
     done
   fi
 
-  # If this environment has no helm history (first deploy here), fall back to
-  # the resolved tags from the previous environment in the promotion chain:
-  #   production falls back to staging   (STAGING_BACKEND_TAG / STAGING_FRONTEND_TAG)
-  #   DR         falls back to production (PRODUCTION_BACKEND_TAG / PRODUCTION_FRONTEND_TAG)
-  # These variables are injected via dotenv artifacts from the upstream deploy job.
+  # Cross-env promotion fallback (injected by plan:<upstream-env> dotenv artifact)
   if [ "$DEPLOY_ENV" = "production" ]; then
-    if [ -z "$DEPLOYED_BACKEND_TAG" ] && [ -n "${STAGING_BACKEND_TAG:-}" ]; then
-      DEPLOYED_BACKEND_TAG="$STAGING_BACKEND_TAG"
-      echo "→ No production history for backend — falling back to staging: $DEPLOYED_BACKEND_TAG"
+    if [ -z "$RESOLVED_BACKEND_TAG" ] && [ -n "${STAGING_BACKEND_TAG:-}" ]; then
+      RESOLVED_BACKEND_TAG="$STAGING_BACKEND_TAG"
+      log "No production Helm history for backend — promoted from staging: $RESOLVED_BACKEND_TAG"
     fi
-    if [ -z "$DEPLOYED_FRONTEND_TAG" ] && [ -n "${STAGING_FRONTEND_TAG:-}" ]; then
-      DEPLOYED_FRONTEND_TAG="$STAGING_FRONTEND_TAG"
-      echo "→ No production history for frontend — falling back to staging: $DEPLOYED_FRONTEND_TAG"
+    if [ -z "$RESOLVED_FRONTEND_TAG" ] && [ -n "${STAGING_FRONTEND_TAG:-}" ]; then
+      RESOLVED_FRONTEND_TAG="$STAGING_FRONTEND_TAG"
+      log "No production Helm history for frontend — promoted from staging: $RESOLVED_FRONTEND_TAG"
     fi
   fi
   if [ "$DEPLOY_ENV" = "dr" ]; then
-    if [ -z "$DEPLOYED_BACKEND_TAG" ] && [ -n "${PRODUCTION_BACKEND_TAG:-}" ]; then
-      DEPLOYED_BACKEND_TAG="$PRODUCTION_BACKEND_TAG"
-      echo "→ No DR history for backend — falling back to production: $DEPLOYED_BACKEND_TAG"
+    if [ -z "$RESOLVED_BACKEND_TAG" ] && [ -n "${PRODUCTION_BACKEND_TAG:-}" ]; then
+      RESOLVED_BACKEND_TAG="$PRODUCTION_BACKEND_TAG"
+      log "No DR Helm history for backend — promoted from production: $RESOLVED_BACKEND_TAG"
     fi
-    if [ -z "$DEPLOYED_FRONTEND_TAG" ] && [ -n "${PRODUCTION_FRONTEND_TAG:-}" ]; then
-      DEPLOYED_FRONTEND_TAG="$PRODUCTION_FRONTEND_TAG"
-      echo "→ No DR history for frontend — falling back to production: $DEPLOYED_FRONTEND_TAG"
+    if [ -z "$RESOLVED_FRONTEND_TAG" ] && [ -n "${PRODUCTION_FRONTEND_TAG:-}" ]; then
+      RESOLVED_FRONTEND_TAG="$PRODUCTION_FRONTEND_TAG"
+      log "No DR Helm history for frontend — promoted from production: $RESOLVED_FRONTEND_TAG"
     fi
   fi
 
-  echo "── Resolved deployed tags ────────────────────────────────"
-  echo "   DEPLOYED_BACKEND_TAG  = '${DEPLOYED_BACKEND_TAG}'"
-  echo "   DEPLOYED_FRONTEND_TAG = '${DEPLOYED_FRONTEND_TAG}'"
-  echo "──────────────────────────────────────────────────────────"
+  ok "Resolved — backend='${RESOLVED_BACKEND_TAG:-<none>}'  frontend='${RESOLVED_FRONTEND_TAG:-<none>}'"
+  ok "Phase 2 complete."
 
-  # Write a per-environment dotenv artifact so the next environment in the chain
-  # can use these resolved tags as a fallback on its first deploy.
-  # staging → production reads staging-tags.env
-  # production → DR reads production-tags.env
-  case "$DEPLOY_ENV" in
-    staging)
-      printf 'STAGING_BACKEND_TAG=%s\nSTAGING_FRONTEND_TAG=%s\n' \
-        "$DEPLOYED_BACKEND_TAG" "$DEPLOYED_FRONTEND_TAG" > staging-tags.env
-      echo "── Exported staging tags for production/DR ───────────────"
-      cat staging-tags.env
-      echo "──────────────────────────────────────────────────────────"
-      ;;
-    production)
-      printf 'PRODUCTION_BACKEND_TAG=%s\nPRODUCTION_FRONTEND_TAG=%s\n' \
-        "$DEPLOYED_BACKEND_TAG" "$DEPLOYED_FRONTEND_TAG" > production-tags.env
-      echo "── Exported production tags for DR ───────────────────────"
-      cat production-tags.env
-      echo "──────────────────────────────────────────────────────────"
-      ;;
-  esac
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 3/3 — Deployment Decision + Values Preview
+  # ═══════════════════════════════════════════════════════════════════════════
+  section "PLAN [${DEPLOY_ENV}]  3/3 — Deployment Decision"
 
-  SET_ARGS=""
+  FINAL_BACKEND_TAG=""
+  FINAL_FRONTEND_TAG=""
+
   if [ "$BACKEND_CHANGED" = "1" ]; then
-    echo "→ Pinning backend → $IMAGE_TAG"
-    SET_ARGS="$SET_ARGS --set backend.image.tag=$IMAGE_TAG"
-  elif [ -n "$DEPLOYED_BACKEND_TAG" ]; then
-    echo "→ Backend unchanged, keeping deployed → $DEPLOYED_BACKEND_TAG"
-    SET_ARGS="$SET_ARGS --set backend.image.tag=$DEPLOYED_BACKEND_TAG"
+    FINAL_BACKEND_TAG="$IMAGE_TAG"
+    log "Backend  CHANGED  → new image:  $ARTIFACTORY_REGISTRY/backend:$FINAL_BACKEND_TAG"
+  elif [ -n "$RESOLVED_BACKEND_TAG" ]; then
+    FINAL_BACKEND_TAG="$RESOLVED_BACKEND_TAG"
+    log "Backend  unchanged → keeping:   $ARTIFACTORY_REGISTRY/backend:$FINAL_BACKEND_TAG"
   else
-    echo "ERROR: Cannot determine backend image tag for '$DEPLOY_ENV'."
-    echo "  No helm history found and staging did not run in this pipeline."
-    echo "  Fix: trigger staging first, or run FORCE_BUILD to build all images."
-    exit 1
+    fail "Cannot determine backend tag for '$DEPLOY_ENV'. No Helm history and no upstream tags. Fix: run staging first or set FORCE_BUILD."
   fi
 
   if [ "$FRONTEND_CHANGED" = "1" ]; then
-    echo "→ Pinning frontend → $IMAGE_TAG"
-    SET_ARGS="$SET_ARGS --set frontend.image.tag=$IMAGE_TAG"
-  elif [ -n "$DEPLOYED_FRONTEND_TAG" ]; then
-    echo "→ Frontend unchanged, keeping deployed → $DEPLOYED_FRONTEND_TAG"
-    SET_ARGS="$SET_ARGS --set frontend.image.tag=$DEPLOYED_FRONTEND_TAG"
+    FINAL_FRONTEND_TAG="$IMAGE_TAG"
+    log "Frontend CHANGED  → new image:  $ARTIFACTORY_REGISTRY/frontend:$FINAL_FRONTEND_TAG"
+  elif [ -n "$RESOLVED_FRONTEND_TAG" ]; then
+    FINAL_FRONTEND_TAG="$RESOLVED_FRONTEND_TAG"
+    log "Frontend unchanged → keeping:   $ARTIFACTORY_REGISTRY/frontend:$FINAL_FRONTEND_TAG"
   else
-    echo "ERROR: Cannot determine frontend image tag for '$DEPLOY_ENV'."
-    echo "  No helm history found and staging did not run in this pipeline."
-    echo "  Fix: trigger staging first, or run FORCE_BUILD to build all images."
-    exit 1
+    fail "Cannot determine frontend tag for '$DEPLOY_ENV'. No Helm history and no upstream tags. Fix: run staging first or set FORCE_BUILD."
   fi
 
-  if [ -z "$SET_ARGS" ] && [ "$HELM_CHANGED" != "1" ]; then
-    echo "Nothing to update — exiting."
+  NO_CHANGES=0
+  if [ "$BACKEND_CHANGED" != "1" ] && [ "$FRONTEND_CHANGED" != "1" ] && [ "$HELM_CHANGED" != "1" ]; then
+    log "No changes in backend, frontend, or Helm chart — deploy will be a no-op."
+    NO_CHANGES=1
+  fi
+
+  log ""
+  log "Values files that will be applied (in order):"
+  log "──── helm/charts/$PROJECT_NAME/values.yaml  (base) ─────────────────────"
+  cat "helm/charts/$PROJECT_NAME/values.yaml"
+  log ""
+  log "──── helm/charts/$PROJECT_NAME/$VALUES_FILE  ($DEPLOY_ENV overrides) ───"
+  cat "helm/charts/$PROJECT_NAME/$VALUES_FILE"
+  log "─────────────────────────────────────────────────────────────────────────"
+
+  # Write plan dotenv:
+  #   FINAL_BACKEND_TAG / FINAL_FRONTEND_TAG / NO_CHANGES → consumed by deploy:<env>
+  #   ${ENV_UPPER}_BACKEND_TAG / ${ENV_UPPER}_FRONTEND_TAG → consumed by plan:<next-env> fallback
+  ENV_UPPER=$(printf '%s' "$DEPLOY_ENV" | tr '[:lower:]' '[:upper:]')
+  {
+    printf 'FINAL_BACKEND_TAG=%s\n'   "$FINAL_BACKEND_TAG"
+    printf 'FINAL_FRONTEND_TAG=%s\n'  "$FINAL_FRONTEND_TAG"
+    printf 'NO_CHANGES=%s\n'          "$NO_CHANGES"
+    printf '%s_BACKEND_TAG=%s\n'      "$ENV_UPPER" "$FINAL_BACKEND_TAG"
+    printf '%s_FRONTEND_TAG=%s\n'     "$ENV_UPPER" "$FINAL_FRONTEND_TAG"
+  } > "${DEPLOY_ENV}-plan.env"
+
+  log ""
+  log "Plan written to ${DEPLOY_ENV}-plan.env:"
+  cat "${DEPLOY_ENV}-plan.env"
+  log ""
+  ok "Plan complete. Trigger 'deploy:${DEPLOY_ENV}' to apply."
+
+# ── Deploy apply script (Phase 4) ─────────────────────────────────────────────
+# Injected CI variables from plan:<env> dotenv artifact:
+#   FINAL_BACKEND_TAG, FINAL_FRONTEND_TAG, NO_CHANGES
+# Job-level variables required:
+#   DEPLOY_ENV, VALUES_FILE, DEPLOY_NAMESPACE, HELM_KUBEAPISERVER, HELM_KUBETOKEN
+.deploy_apply_script: &deploy_apply_script |
+  set -e
+
+  _ts()     { date '+%d/%m/%Y %H:%M:%S'; }
+  log()     { echo "[$(_ts)] $*"; }
+  ok()      { echo "[$(_ts)] OK  $*"; }
+  fail()    { echo "[$(_ts)] ERR $*" >&2; exit 1; }
+  section() {
+    echo ""
+    echo "[$(_ts)] ══════════════════════════════════════════════════"
+    echo "[$(_ts)]   $*"
+    echo "[$(_ts)] ══════════════════════════════════════════════════"
+  }
+
+  section "DEPLOY [${DEPLOY_ENV}] — Helm Upgrade"
+
+  [ -n "$FINAL_BACKEND_TAG" ]  || fail "FINAL_BACKEND_TAG is empty — plan:${DEPLOY_ENV} artifact not injected."
+  [ -n "$FINAL_FRONTEND_TAG" ] || fail "FINAL_FRONTEND_TAG is empty — plan:${DEPLOY_ENV} artifact not injected."
+
+  if [ "${NO_CHANGES:-0}" = "1" ]; then
+    log "Plan indicated no changes in backend, frontend, or Helm chart — nothing to deploy."
     exit 0
   fi
 
-  # An empty tag means either the image was never built or awk parsed a broken
-  # previous deploy — either way, deploying "" would cause an image pull failure.
-  _BACKEND_TAG_ARG=$(echo "$SET_ARGS" | grep -o 'backend\.image\.tag=[^ ]*' | cut -d= -f2 || true)
-  _FRONTEND_TAG_ARG=$(echo "$SET_ARGS" | grep -o 'frontend\.image\.tag=[^ ]*' | cut -d= -f2 || true)
-  if [ -z "$_BACKEND_TAG_ARG" ] || [ -z "$_FRONTEND_TAG_ARG" ]; then
-    echo "ERROR: one or more image tags resolved to empty."
-    echo "  backend.image.tag  = '${_BACKEND_TAG_ARG}'"
-    echo "  frontend.image.tag = '${_FRONTEND_TAG_ARG}'"
-    echo "  SET_ARGS           = '$SET_ARGS'"
-    exit 1
-  fi
+  log "Release        : $PROJECT_NAME"
+  log "Namespace      : $DEPLOY_NAMESPACE"
+  log "Cluster API    : $HELM_KUBEAPISERVER"
+  log "Backend image  : $ARTIFACTORY_REGISTRY/backend:$FINAL_BACKEND_TAG"
+  log "Frontend image : $ARTIFACTORY_REGISTRY/frontend:$FINAL_FRONTEND_TAG"
+  log "Values files   : values.yaml + $VALUES_FILE"
+  log "Helm flags     : --wait --timeout 5m"
+  log ""
+  log "Running helm upgrade --install..."
 
-  echo "── Variables ──────────────────────────────────────────────"
-  echo "   PROJECT_NAME       : $PROJECT_NAME"
-  echo "   VALUES_FILE        : $VALUES_FILE"
-  echo "   DEPLOY_NAMESPACE   : $DEPLOY_NAMESPACE"
-  # DELETED: ARTIFACTORY_REGISTRY variable removed — registry is now hardcoded in the helm --set lines below
-  echo "   SET_ARGS           : $SET_ARGS"
-  echo "── Values files ───────────────────────────────────────────"
-  ls -la "helm/charts/$PROJECT_NAME/values.yaml" "helm/charts/$PROJECT_NAME/$VALUES_FILE" || true
-  echo "──────────────────────────────────────────────────────────"
-
-  # PROJECT_NAME = your GitLab CI variable for the Helm release name (e.g. zabbix-portal)
-  # DELETED: ARTIFACTORY_REGISTRY variable removed — registry path is now hardcoded below.
-  # Replace <your-artifactory-registry> with your actual registry path (e.g. artifactory.example.com/docker-local).
+  HELM_START=$(date +%s)
+  set +x  # suppress command echo to keep secrets out of CI logs
   helm upgrade --install "$PROJECT_NAME" "helm/charts/$PROJECT_NAME/" \
     --namespace "$DEPLOY_NAMESPACE" \
     -f "helm/charts/$PROJECT_NAME/values.yaml" \
     -f "helm/charts/$PROJECT_NAME/$VALUES_FILE" \
-    --set backend.image.repository="<your-artifactory-registry>/backend" \
-    --set frontend.image.repository="<your-artifactory-registry>/frontend" \
-    --set frontend.backendUrl="http://$PROJECT_NAME-backend:6769" \
+    --set backend.image.repository="$ARTIFACTORY_REGISTRY/backend" \
+    --set backend.image.tag="$FINAL_BACKEND_TAG" \
+    --set frontend.image.repository="$ARTIFACTORY_REGISTRY/frontend" \
+    --set frontend.image.tag="$FINAL_FRONTEND_TAG" \
     --wait \
-    --timeout 5m \
-    $SET_ARGS
+    --timeout 5m
+  HELM_END=$(date +%s)
 
-  # Deployment verification is handled by --wait above: Helm polls the OC cluster
-  # API (HELM_KUBEAPISERVER + HELM_KUBETOKEN) and only exits 0 once all pods
-  # have passed their readiness probes. If any pod fails to become Ready within
-  # --timeout 5m, Helm exits non-zero and the pipeline fails.
+  ok "Helm upgrade succeeded in $((HELM_END - HELM_START))s."
+  log ""
+  log "Deployment complete for $DEPLOY_ENV:"
+  log "  backend  → $ARTIFACTORY_REGISTRY/backend:$FINAL_BACKEND_TAG"
+  log "  frontend → $ARTIFACTORY_REGISTRY/frontend:$FINAL_FRONTEND_TAG"
+  log "Pods are Ready (verified by --wait — Helm polls the cluster API until"
+  log "all pods pass readiness probes or --timeout 5m is exceeded)."
 
-# ── Deploy to staging (auto on tag) ──────────────────────────────────────────
-deploy:staging:
-  extends: .deploy_base
+# =============================================================================
+# STAGING
+# =============================================================================
+
+plan:staging:
+  extends: .helm_base
   stage: staging
   needs:
     - job: detect
       artifacts: true
     - job: backend:docker:build
       optional: true
+      artifacts: false
     - job: frontend:docker:build
       optional: true
+      artifacts: false
   environment:
     name: staging
-    url: $STAGING_URL  # replace STAGING_URL with your GitLab CI variable for the staging environment URL
   variables:
     DEPLOY_ENV: "staging"
-    VALUES_FILE: "values-staging.yaml"       # override file merged on top of values.yaml for this environment
-    DEPLOY_NAMESPACE: "$K8S_NAMESPACE"        # set K8S_NAMESPACE in GitLab Settings → CI/CD → Variables to your existing OpenShift namespace
-    HELM_KUBEAPISERVER: "$STAGING_SERVER"     # replace STAGING_SERVER with your GitLab CI variable for the staging cluster URL
-    HELM_KUBETOKEN: "$STAGING_TOKEN"          # replace STAGING_TOKEN with your GitLab CI variable for the staging auth token
+    VALUES_FILE: "values-staging.yaml"
+    DEPLOY_NAMESPACE: "$K8S_NAMESPACE"
+    HELM_KUBEAPISERVER: "$STAGING_SERVER"
+    HELM_KUBETOKEN: "$STAGING_TOKEN"
     HELM_KUBEINSECURE_SKIP_TLS_VERIFY: "true"
   script:
-    - *deploy_script
+    - *plan_script
   artifacts:
     reports:
-      dotenv: staging-tags.env   # exports STAGING_BACKEND_TAG + STAGING_FRONTEND_TAG to production/DR jobs
+      dotenv: staging-plan.env
     expire_in: 1 week
   rules:
     - if: $CI_COMMIT_TAG
-    - if: $FORCE_BUILD  # allow manual force-deploy from any branch
+    - if: $FORCE_BUILD == "1"
 
-# ── Deploy to production (manual gate) ───────────────────────────────────────
-deploy:production:
-  extends: .deploy_base
+deploy:staging:
+  extends: .helm_base
+  stage: staging
+  needs:
+    - job: plan:staging
+      artifacts: true
+  environment:
+    name: staging
+  variables:
+    DEPLOY_ENV: "staging"
+    VALUES_FILE: "values-staging.yaml"
+    DEPLOY_NAMESPACE: "$K8S_NAMESPACE"
+    HELM_KUBEAPISERVER: "$STAGING_SERVER"
+    HELM_KUBETOKEN: "$STAGING_TOKEN"
+    HELM_KUBEINSECURE_SKIP_TLS_VERIFY: "true"
+  script:
+    - *deploy_apply_script
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $FORCE_BUILD == "1"
+
+# =============================================================================
+# PRODUCTION
+# =============================================================================
+
+plan:production:
+  extends: .helm_base
   stage: production
   needs:
     - job: detect
       artifacts: true
+    - job: plan:staging
+      artifacts: true   # injects STAGING_BACKEND_TAG + STAGING_FRONTEND_TAG for first-deploy fallback
     - job: deploy:staging
-      optional: true
+      artifacts: false  # ordering: do not plan production until staging is deployed
     - job: backend:docker:build
       optional: true
+      artifacts: false
     - job: frontend:docker:build
       optional: true
-  when: manual
+      artifacts: false
   environment:
     name: production
-    url: $PRODUCTION_URL  # replace PRODUCTION_URL with your GitLab CI variable for the production environment URL
   variables:
     DEPLOY_ENV: "production"
-    VALUES_FILE: "values-production.yaml"    # override file merged on top of values.yaml for this environment
-    DEPLOY_NAMESPACE: "$K8S_NAMESPACE"        # set K8S_NAMESPACE in GitLab Settings → CI/CD → Variables to your existing OpenShift namespace
-    HELM_KUBEAPISERVER: "$PROD_SERVER"        # replace PROD_SERVER with your GitLab CI variable for the production cluster URL
-    HELM_KUBETOKEN: "$PROD_TOKEN"             # replace PROD_TOKEN with your GitLab CI variable for the production auth token
+    VALUES_FILE: "values-production.yaml"
+    DEPLOY_NAMESPACE: "$K8S_NAMESPACE"
+    HELM_KUBEAPISERVER: "$PROD_SERVER"
+    HELM_KUBETOKEN: "$PROD_TOKEN"
     HELM_KUBEINSECURE_SKIP_TLS_VERIFY: "true"
   script:
-    - *deploy_script
+    - *plan_script
   artifacts:
     reports:
-      dotenv: production-tags.env   # exports PRODUCTION_BACKEND_TAG + PRODUCTION_FRONTEND_TAG to DR job
+      dotenv: production-plan.env
     expire_in: 1 week
   rules:
     - if: $CI_COMMIT_TAG
 
-# ── Deploy to DR (manual gate) ───────────────────────────────────────────────
-deploy:dr:
-  extends: .deploy_base
+deploy:production:
+  extends: .helm_base
+  stage: production
+  needs:
+    - job: plan:production
+      artifacts: true
+  when: manual
+  environment:
+    name: production
+  variables:
+    DEPLOY_ENV: "production"
+    VALUES_FILE: "values-production.yaml"
+    DEPLOY_NAMESPACE: "$K8S_NAMESPACE"
+    HELM_KUBEAPISERVER: "$PROD_SERVER"
+    HELM_KUBETOKEN: "$PROD_TOKEN"
+    HELM_KUBEINSECURE_SKIP_TLS_VERIFY: "true"
+  script:
+    - *deploy_apply_script
+  rules:
+    - if: $CI_COMMIT_TAG
+
+# =============================================================================
+# DR
+# =============================================================================
+
+plan:dr:
+  extends: .helm_base
   stage: dr
   needs:
     - job: detect
       artifacts: true
+    - job: plan:production
+      artifacts: true   # injects PRODUCTION_BACKEND_TAG + PRODUCTION_FRONTEND_TAG for first-deploy fallback
     - job: deploy:production
-      optional: true
+      optional: true    # ordering: prefer to plan DR after production is deployed (manual gate — non-blocking)
+      artifacts: false
     - job: backend:docker:build
       optional: true
+      artifacts: false
     - job: frontend:docker:build
       optional: true
+      artifacts: false
+  environment:
+    name: dr
+  variables:
+    DEPLOY_ENV: "dr"
+    VALUES_FILE: "values-dr.yaml"
+    DEPLOY_NAMESPACE: "$K8S_NAMESPACE"
+    HELM_KUBEAPISERVER: "$DR_SERVER"
+    HELM_KUBETOKEN: "$DR_TOKEN"
+    HELM_KUBEINSECURE_SKIP_TLS_VERIFY: "true"
+  script:
+    - *plan_script
+  artifacts:
+    reports:
+      dotenv: dr-plan.env
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_TAG
+
+deploy:dr:
+  extends: .helm_base
+  stage: dr
+  needs:
+    - job: plan:dr
+      artifacts: true
   when: manual
   environment:
     name: dr
-    url: $DR_URL  # replace DR_URL with your GitLab CI variable for the DR environment URL
   variables:
     DEPLOY_ENV: "dr"
-    VALUES_FILE: "values-dr.yaml"            # override file merged on top of values.yaml for this environment
-    DEPLOY_NAMESPACE: "$K8S_NAMESPACE"        # set K8S_NAMESPACE in GitLab Settings → CI/CD → Variables to your existing OpenShift namespace
-    HELM_KUBEAPISERVER: "$PROD_SERVER"        # DR uses prod cluster — replace if DR has its own cluster URL variable
-    HELM_KUBETOKEN: "$PROD_TOKEN"             # DR uses prod token — replace if DR has its own token variable
+    VALUES_FILE: "values-dr.yaml"
+    DEPLOY_NAMESPACE: "$K8S_NAMESPACE"
+    HELM_KUBEAPISERVER: "$DR_SERVER"
+    HELM_KUBETOKEN: "$DR_TOKEN"
     HELM_KUBEINSECURE_SKIP_TLS_VERIFY: "true"
   script:
-    - *deploy_script
+    - *deploy_apply_script
   rules:
     - if: $CI_COMMIT_TAG

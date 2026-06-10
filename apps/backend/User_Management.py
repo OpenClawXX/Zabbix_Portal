@@ -1,6 +1,9 @@
 import json
+import logging
 import os
 from Database import get_conn
+
+logger = logging.getLogger(__name__)
 
 
 # ── Teams ─────────────────────────────────────────────────────────────────────
@@ -19,7 +22,7 @@ def create_team(name: str, description: str = "") -> dict | None:
         return row
     except Exception as exc:
         conn.rollback()
-        print(f"create_team failed: {repr(exc)}")
+        logger.error("create_team failed: %r", exc)
         return None
     finally:
         conn.close()
@@ -32,7 +35,7 @@ def list_teams() -> list[dict]:
             cur.execute("SELECT id, name, description FROM teams ORDER BY name")
             return [dict(r) for r in cur.fetchall()]
     except Exception as exc:
-        print(f"list_teams failed: {repr(exc)}")
+        logger.error("list_teams failed: %r", exc)
         return []
     finally:
         conn.close()
@@ -48,7 +51,7 @@ def delete_team(team_id: int) -> bool:
         return deleted
     except Exception as exc:
         conn.rollback()
-        print(f"delete_team failed: {repr(exc)}")
+        logger.error("delete_team failed: %r", exc)
         return False
     finally:
         conn.close()
@@ -80,7 +83,7 @@ def create_user(
         return row
     except Exception as exc:
         conn.rollback()
-        print(f"create_user failed: {repr(exc)}")
+        logger.error("create_user failed: %r", exc)
         return None
     finally:
         conn.close()
@@ -97,7 +100,7 @@ def get_user_by_username(username: str) -> dict | None:
             row = cur.fetchone()
             return dict(row) if row else None
     except Exception as exc:
-        print(f"get_user_by_username failed: {repr(exc)}")
+        logger.error("get_user_by_username failed: %r", exc)
         return None
     finally:
         conn.close()
@@ -114,7 +117,7 @@ def get_user_by_id(user_id: int) -> dict | None:
             row = cur.fetchone()
             return dict(row) if row else None
     except Exception as exc:
-        print(f"get_user_by_id failed: {repr(exc)}")
+        logger.error("get_user_by_id failed: %r", exc)
         return None
     finally:
         conn.close()
@@ -130,7 +133,7 @@ def delete_user(user_id: int) -> bool:
         return deleted
     except Exception as exc:
         conn.rollback()
-        print(f"delete_user failed: {repr(exc)}")
+        logger.error("delete_user failed: %r", exc)
         return False
     finally:
         conn.close()
@@ -153,7 +156,7 @@ def assign_host(team_id: int, hostname: str) -> bool:
         return True
     except Exception as exc:
         conn.rollback()
-        print(f"assign_host failed: {repr(exc)}")
+        logger.error("assign_host failed: %r", exc)
         return False
     finally:
         conn.close()
@@ -169,7 +172,7 @@ def unassign_host(hostname: str) -> bool:
         return deleted
     except Exception as exc:
         conn.rollback()
-        print(f"unassign_host failed: {repr(exc)}")
+        logger.error("unassign_host failed: %r", exc)
         return False
     finally:
         conn.close()
@@ -213,7 +216,7 @@ def get_overview(team_id: int | None = None) -> list[dict]:
                 cur.execute(base + " ORDER BY t.name")
             return [dict(r) for r in cur.fetchall()]
     except Exception as exc:
-        print(f"get_overview failed: {repr(exc)}")
+        logger.error("get_overview failed: %r", exc)
         return []
     finally:
         conn.close()
@@ -232,7 +235,7 @@ def update_password(user_id: int, password_hash: str) -> bool:
         return updated
     except Exception as exc:
         conn.rollback()
-        print(f"update_password failed: {repr(exc)}")
+        logger.error("update_password failed: %r", exc)
         return False
     finally:
         conn.close()
@@ -260,7 +263,7 @@ def list_users(team_id: int | None = None) -> list[dict]:
                 )
             return [dict(r) for r in cur.fetchall()]
     except Exception as exc:
-        print(f"list_users failed: {repr(exc)}")
+        logger.error("list_users failed: %r", exc)
         return []
     finally:
         conn.close()
@@ -279,7 +282,7 @@ def update_user_profile(user_id: int, roles: list[str], team_id: int | None) -> 
         return updated
     except Exception as exc:
         conn.rollback()
-        print(f"update_user_profile failed: {repr(exc)}")
+        logger.error("update_user_profile failed: %r", exc)
         return False
     finally:
         conn.close()
@@ -294,7 +297,7 @@ def get_team_hostnames(team_id: int) -> set[str]:
             )
             return {row["hostname"] for row in cur.fetchall()}
     except Exception as exc:
-        print(f"get_team_hostnames failed: {repr(exc)}")
+        logger.error("get_team_hostnames failed: %r", exc)
         return set()
     finally:
         conn.close()
@@ -308,7 +311,7 @@ def get_team_name(team_id: int) -> str | None:
             row = cur.fetchone()
             return row["name"] if row else None
     except Exception as exc:
-        print(f"get_team_name failed: {repr(exc)}")
+        logger.error("get_team_name failed: %r", exc)
         return None
     finally:
         conn.close()
@@ -318,16 +321,14 @@ def get_team_name(team_id: int) -> str | None:
 
 
 def seed_root():
-    import logging
     from Auth import hash_password
 
-    _log = logging.getLogger(__name__)
     username = os.getenv("ADMIN_USERNAME", "Admin")
     password = os.getenv("ADMIN_PASSWORD")
     if not password:
         password = "admin"
-        _log.warning(
-            "ADMIN_PASSWORD env var is not set — seeding root with default password 'admin'. "
+        logger.warning(
+            "ADMIN_PASSWORD env var is not set — root account seeded with a default password. "
             "Change it immediately after first login."
         )
     conn = get_conn()
@@ -344,13 +345,14 @@ def seed_root():
                 )
                 # Advance the sequence so the next user gets ID 2
                 cur.execute("SELECT setval('team_users_id_seq', 1, true)")
-                print(
-                    f"Seeded default root user: '{username}' (id=1) — change the password after first login."
+                logger.info(
+                    "Seeded default root user: %r (id=1) — change the password after first login.",
+                    username,
                 )
         conn.commit()
     except Exception as exc:
         conn.rollback()
-        print(f"seed_root failed: {repr(exc)}")
+        logger.error("seed_root failed: %r", exc)
     finally:
         conn.close()
 
@@ -371,7 +373,7 @@ def get_dashboard_layout(
             row = cur.fetchone()
             return row["layout"] if row else []
     except Exception as exc:
-        print(f"get_dashboard_layout failed: {repr(exc)}")
+        logger.error("get_dashboard_layout failed: %r", exc)
         return []
     finally:
         conn.close()
@@ -394,7 +396,7 @@ def save_dashboard_layout(
         return True
     except Exception as exc:
         conn.rollback()
-        print(f"save_dashboard_layout failed: {repr(exc)}")
+        logger.error("save_dashboard_layout failed: %r", exc)
         return False
     finally:
         conn.close()

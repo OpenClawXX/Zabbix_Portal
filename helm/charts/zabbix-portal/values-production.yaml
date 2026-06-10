@@ -3,7 +3,9 @@
 # Only include values that differ from the base values.yaml.
 
 backend:
-  replicaCount: 3
+  replicaCount: 1
+  env:
+    LOG_LEVEL: "WARNING"  # production: warnings and errors only — reduce noise
   resources:
     requests:
       cpu: 200m
@@ -13,7 +15,7 @@ backend:
       memory: 1Gi
 
 frontend:
-  replicaCount: 3
+  replicaCount: 1
   resources:
     requests:
       cpu: 100m

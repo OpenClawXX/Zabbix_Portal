@@ -8,9 +8,13 @@ from io import BytesIO
 from typing import Literal
 
 import pandas as pd
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Body, Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from Alert_Manager import Alert_Manager
 from Auth import (
@@ -24,7 +28,7 @@ from Auth import (
     verify_password,
 )
 from Dashboard_Manager import Dashboard_Manager
-from Database import init_db, install_notify_triggers
+from Database import get_conn, init_db, install_notify_triggers
 from Host_Manager import Host_Manager
 from Item_Manager import Item_Manager
 from Metrics_Manager import Metrics_Manager
@@ -32,6 +36,20 @@ import User_Management as um
 from ZabbixSync import ZabbixSync
 
 logger = logging.getLogger(__name__)
+
+# ── Logging configuration ─────────────────────────────────────────────
+_log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, _log_level, logging.INFO),
+    format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+# /health is polled every 15 s — suppress its access log to avoid noise
+logging.getLogger("uvicorn.access").addFilter(
+    type("_HealthFilter", (logging.Filter,), {
+        "filter": lambda self, r: "/health" not in r.getMessage()
+    })()
+)
 
 # ── Managers ─────────────────────────────────────────────────────────
 # Instantiated at module level; each manager handles Zabbix connection
@@ -116,12 +134,46 @@ async def lifespan(app: FastAPI):
 
 
 # ── App ───────────────────────────────────────────────────────────────
+_limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(
     title="Zabbix DevOps API",
     description="Manage Zabbix hosts and items via REST",
     version="1.0.0",
     lifespan=lifespan,
 )
+app.state.limiter = _limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# CORS — reads ALLOWED_ORIGINS from env (ConfigMap in OC, .env locally).
+# Local Docker:   ALLOWED_ORIGINS=http://localhost:42069   (port required — non-standard)
+# OpenShift:      ALLOWED_ORIGINS=https://your-frontend-route.apps.cluster.example.com  (no port — Route uses 443)
+# Multiple:       comma-separated, e.g. "https://staging.example.com,https://prod.example.com"
+# Defaults to "*" when the variable is not set (local dev without strict CORS).
+_allowed_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.middleware("http")
+async def _log_requests(request: Request, call_next):
+    """Log every request with method, path, status code, and duration. Skip /health."""
+    if request.url.path == "/health":
+        return await call_next(request)
+    t0 = time.monotonic()
+    response = await call_next(request)
+    ms = (time.monotonic() - t0) * 1000
+    logger.info(
+        "%s %s → %d (%.0f ms)",
+        request.method, request.url.path, response.status_code, ms,
+    )
+    return response
+
 
 # ── Request Schemas ───────────────────────────────────────────────────
 
@@ -148,6 +200,140 @@ class TriggerRequest(BaseModel):
     severity: int | None = 3
 
 
+class HttpItemRequest(BaseModel):
+    hostname: str
+    item_name: str
+    url: str
+    item_key: str = ""
+    request_method: int = 0       # 0=GET 1=POST 2=PUT 3=HEAD
+    status_codes: str = "200"
+    timeout: str = "15s"
+    verify_peer: bool = True
+    follow_redirects: bool = True
+    posts: str = ""
+    value_type: int = 3           # 3=integer (code), 0=float (time), 4=text (body)
+    team_name: str = ""
+    # authentication
+    authtype: int = 0             # 0=None, 1=Basic, 2=NTLM
+    username: str = ""
+    password: str = ""
+    # regex preprocessing
+    regex_preprocessing: bool = False
+    regex_pattern: str = ""
+    regex_output: str = "\\1"     # first capture group by default
+    regex_no_match_value: str = "0"
+
+
+class ServiceItemRequest(BaseModel):
+    hostname: str
+    service_type: str             # icmp_ping|icmp_loss|icmp_time|http|https|ssh|smtp|ftp|tcp_port
+    port: int | None = None
+    item_name: str = ""
+    team_name: str = ""
+
+
+class FileWatchRequest(BaseModel):
+    hostname: str
+    file_path: str
+    check_type: str = "checksum"  # checksum | mtime | size | exists | folder_latest
+    item_name: str = ""
+    team_name: str = ""
+    folder_os: str = "linux"      # linux | windows  (folder_latest only)
+    create_trigger: bool = True
+    trigger_name: str = ""
+    trigger_priority: int = 2
+    trigger_type: str = "change"  # change | age
+    max_age_minutes: int = 60     # used when trigger_type = "age"
+
+
+class ScriptItemRequest(BaseModel):
+    hostname: str
+    script_type: str = "bash"     # bash | powershell
+    script_mode: str = "command"  # command | file
+    script: str                   # inline command or absolute script path on host
+    file_arg: str = ""            # optional file argument passed to the script
+    item_name: str = ""
+    value_type: int = 1           # 1=string default for script output
+    team_name: str = ""
+
+
+class BulkItemRequest(BaseModel):
+    hostnames: list[str]
+    item_type: str = "agent"      # agent | http | service | script
+    item_name: str = ""
+    item_key: str = ""
+    value_type: int = 3
+    url: str = ""
+    request_method: int = 0
+    status_codes: str = "200"
+    timeout: str = "15s"
+    verify_peer: bool = True
+    follow_redirects: bool = True
+    posts: str = ""
+    service_type: str = ""
+    port: int | None = None
+    # http auth fields
+    authtype: int = 0
+    username: str = ""
+    password: str = ""
+    regex_preprocessing: bool = False
+    regex_pattern: str = ""
+    regex_output: str = "\\1"
+    regex_no_match_value: str = "0"
+    # script fields
+    script_type: str = "bash"
+    script_mode: str = "command"
+    script: str = ""
+    file_arg: str = ""
+    team_name: str = ""
+
+
+class BulkTriggerRequest(BaseModel):
+    hostnames: list[str]
+    item_key: str
+    trigger_name: str
+    threshold: float
+    operator: Literal[">", ">=", "<", "<="] | None = ">"
+    priority: int = 3
+
+
+class AcknowledgeRequest(BaseModel):
+    problem_name: str = ""
+    hostname: str = ""
+    severity: int = 0
+    note: str = ""
+
+
+class HostTagItem(BaseModel):
+    tag: str
+    value: str = ""
+
+
+class TagsUpdateRequest(BaseModel):
+    tags: list[HostTagItem]
+
+
+class DbOdbcRequest(BaseModel):
+    hostname: str
+    dsn: str
+    sql_query: str
+    description: str
+    item_name: str = ""
+    value_type: int = 3
+    username: str = ""
+    password: str = ""
+
+
+class DbAgent2Request(BaseModel):
+    hostname: str
+    engine: str
+    conn_string: str
+    metric: str
+    extra_param: str = ""
+    item_name: str = ""
+    value_type: int | None = None
+
+
 # ── Routes ────────────────────────────────────────────────────────────
 
 
@@ -159,6 +345,29 @@ def _live_team_id(current_user: dict) -> int | None:
         return (live.get("team_id") if live else None) or current_user.get("team_id")
     except Exception:
         return current_user.get("team_id")
+
+
+def _team_hostname_filter(current_user: dict) -> set[str] | None:
+    """Return the set of hostnames visible to this user.
+    Returns None for root/auditor (no restriction).
+    Returns an empty set when the user has no team assignment.
+    """
+    roles = current_user.get("roles", [])
+    if any(r in roles for r in ("root", "auditor")):
+        return None
+    team_id = _live_team_id(current_user)
+    if not team_id:
+        return set()
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT hostname FROM host_assignments WHERE team_id = %s",
+                (team_id,),
+            )
+            return {row["hostname"] for row in cur.fetchall()}
+    finally:
+        conn.close()
 
 
 @app.get("/health", tags=["Status"], summary="API Health Check")
@@ -266,9 +475,10 @@ def get_all_hosts(current_user: dict = Depends(get_current_user)):
 
 
 @app.get("/hosts/download", tags=["Hosts"], summary="Download Host Inventory (.xlsx)")
-def download_inventory():
-    """Generates an Excel file of all hosts and triggers a download."""
-    excel_bytes = host_bot.export_hosts_to_excel_bytes()
+def download_inventory(current_user: dict = Depends(get_current_user)):
+    """Generates an Excel file of the hosts visible to the current user."""
+    allowed = _team_hostname_filter(current_user)
+    excel_bytes = host_bot.export_hosts_to_excel_bytes(hostname_filter=allowed)
     if not excel_bytes:
         raise HTTPException(status_code=500, detail="Failed to generate Excel file.")
     headers = {"Content-Disposition": 'attachment; filename="Zabbix_Inventory.xlsx"'}
@@ -297,9 +507,11 @@ def create_host(data: HostRequest, current_user: dict = Depends(require_operator
     if team_id:
         team_name = um.get_team_name(team_id)
         if not um.assign_host(team_id, data.hostname):
-            print(f"⚠️  assign_host failed for {data.hostname!r} team_id={team_id}")
+            logger.warning("assign_host failed for %r team_id=%s", data.hostname, team_id)
         if team_name:
             host_bot.tag_host(data.hostname, team_name)
+            # Add to the team's Zabbix host group so the team user can see it in Zabbix
+            host_bot.add_host_to_hostgroup(data.hostname, team_name)
     return {"message": "Host created successfully.", "hostid": result}
 
 
@@ -323,6 +535,8 @@ async def bulk_create_hosts(
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    if len(content) > 10 * 1024 * 1024:  # 10 MB hard limit
+        raise HTTPException(status_code=413, detail="File too large. Maximum size is 10 MB.")
 
     try:
         if filename.endswith(".csv"):
@@ -330,8 +544,9 @@ async def bulk_create_hosts(
         else:
             df = pd.read_excel(BytesIO(content))
     except Exception as exc:
+        logger.error("Bulk upload: failed to parse file %r: %r", file.filename, exc)
         raise HTTPException(
-            status_code=400, detail=f"Failed to parse file: {exc}"
+            status_code=400, detail="Failed to parse file. Ensure it is a valid CSV or XLSX."
         ) from exc
 
     normalized = {str(c).strip().lower(): c for c in df.columns}
@@ -412,12 +627,37 @@ def delete_host(hostname: str, current_user: dict = Depends(require_operator)):
     return {"message": f"Host '{hostname}' deleted successfully."}
 
 
+@app.put("/hosts/{hostname}/tags", tags=["Hosts"], summary="Update custom tags on a host")
+def update_host_tags(
+    hostname: str,
+    body: TagsUpdateRequest,
+    current_user: dict = Depends(require_operator),
+):
+    """Replace all non-team tags on a host. The 'team' tag is preserved automatically."""
+    allowed = _team_hostname_filter(current_user)
+    if allowed is not None and hostname not in allowed:
+        raise HTTPException(status_code=403, detail="Host not in your team.")
+    payload = [{"tag": t.tag, "value": t.value} for t in body.tags]
+    ok, err = host_bot.update_host_tags(hostname, payload)
+    if not ok:
+        raise HTTPException(status_code=400, detail=err or "Failed to update tags.")
+    return {"message": "Tags updated."}
+
+
+@app.get("/items/keys", tags=["Items"], summary="List all item keys from Zabbix templates")
+def list_item_keys(current_user: dict = Depends(get_current_user)):
+    return {"items": item_bot.get_all_item_keys()}
+
+
 @app.get("/items/{hostname}", tags=["Items"], summary="List items for a host")
 def list_items(
     hostname: str,
     include_inherited: bool = False,
     current_user: dict = Depends(get_current_user),
 ):
+    allowed = _team_hostname_filter(current_user)
+    if allowed is not None and hostname not in allowed:
+        raise HTTPException(status_code=403, detail="Host not assigned to your team.")
     return {"items": item_bot.list_items(hostname, include_inherited=include_inherited)}
 
 
@@ -432,6 +672,9 @@ def delete_item(itemid: str, current_user: dict = Depends(require_operator)):
 
 @app.get("/triggers/{hostname}", tags=["Triggers"], summary="List triggers for a host")
 def list_triggers(hostname: str, current_user: dict = Depends(get_current_user)):
+    allowed = _team_hostname_filter(current_user)
+    if allowed is not None and hostname not in allowed:
+        raise HTTPException(status_code=403, detail="Host not assigned to your team.")
     return {"triggers": item_bot.list_triggers(hostname)}
 
 
@@ -446,7 +689,45 @@ def delete_trigger(triggerid: str, current_user: dict = Depends(require_operator
 
 @app.get("/metrics/problems", tags=["Metrics"], summary="Active Zabbix problems")
 def get_problems(current_user: dict = Depends(get_current_user)):
-    return {"problems": metrics_bot.get_problems()}
+    problems = metrics_bot.get_problems()
+    if not problems:
+        return {"problems": problems}
+
+    # root and auditor see all problems; everyone else sees only their team's hosts.
+    allowed = _team_hostname_filter(current_user)
+    if allowed is not None:
+        problems = [p for p in problems if p["hostname"] in allowed]
+
+    if not problems:
+        return {"problems": problems}
+
+    # Enrich acknowledged problems with who/when/note from our DB.
+    acked_ids = [p["eventid"] for p in problems if p["acknowledged"]]
+    if acked_ids:
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT DISTINCT ON (eventid) eventid, acknowledged_by, acked_at, note
+                       FROM problem_acknowledgements
+                       WHERE eventid = ANY(%s)
+                       ORDER BY eventid, acked_at DESC""",
+                    (acked_ids,),
+                )
+                ack_map = {
+                    row["eventid"]: {
+                        "ack_user": row["acknowledged_by"],
+                        "ack_time": row["acked_at"].isoformat(),
+                        "ack_note": row["note"],
+                    }
+                    for row in cur.fetchall()
+                }
+        finally:
+            conn.close()
+        for p in problems:
+            if p["eventid"] in ack_map:
+                p.update(ack_map[p["eventid"]])
+    return {"problems": problems}
 
 
 @app.post(
@@ -456,11 +737,115 @@ def get_problems(current_user: dict = Depends(get_current_user)):
 )
 def acknowledge_problem(
     eventid: str,
+    body: AcknowledgeRequest = Body(default_factory=AcknowledgeRequest),
     current_user: dict = Depends(get_current_user),
 ):
-    if not metrics_bot.acknowledge_problem(eventid):
+    roles = current_user.get("roles", [])
+    if "root" not in roles and body.hostname:
+        user_team_id = _live_team_id(current_user)
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT team_id FROM host_assignments WHERE hostname = %s LIMIT 1",
+                    (body.hostname,),
+                )
+                row = cur.fetchone()
+        finally:
+            conn.close()
+        if row is not None and row["team_id"] != user_team_id:
+            raise HTTPException(
+                status_code=403,
+                detail="You can only acknowledge problems for hosts assigned to your team.",
+            )
+
+    username = current_user.get("username", "unknown")
+    if not metrics_bot.acknowledge_problem(eventid, username=username, note=body.note):
         raise HTTPException(status_code=503, detail="Zabbix not connected or acknowledge failed.")
-    return {"message": "Problem acknowledged."}
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO problem_acknowledgements
+                       (eventid, problem_name, hostname, severity, acknowledged_by, note)
+                   VALUES (%s, %s, %s, %s, %s, %s)""",
+                (eventid, body.problem_name, body.hostname, body.severity, username, body.note),
+            )
+            conn.commit()
+    finally:
+        conn.close()
+    logger.info("Problem %s acknowledged by %s.", eventid, username)
+    return {"message": "Problem acknowledged.", "acknowledged_by": username}
+
+
+@app.get("/metrics/acknowledgements", tags=["Metrics"], summary="Acknowledgement audit log")
+def list_acknowledgements(
+    limit: int = 200,
+    current_user: dict = Depends(get_current_user),
+):
+    allowed = _team_hostname_filter(current_user)
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            if allowed is None:
+                cur.execute(
+                    """SELECT id, eventid, problem_name, hostname, severity,
+                              acknowledged_by, note, acked_at
+                       FROM problem_acknowledgements
+                       ORDER BY acked_at DESC LIMIT %s""",
+                    (limit,),
+                )
+            else:
+                team_id = _live_team_id(current_user)
+                team_usernames: list[str] = []
+                if team_id:
+                    cur.execute(
+                        "SELECT username FROM team_users WHERE team_id = %s",
+                        (team_id,),
+                    )
+                    team_usernames = [row["username"] for row in cur.fetchall()]
+                cur.execute(
+                    """SELECT id, eventid, problem_name, hostname, severity,
+                              acknowledged_by, note, acked_at
+                       FROM problem_acknowledgements
+                       WHERE hostname = ANY(%s) OR acknowledged_by = ANY(%s)
+                       ORDER BY acked_at DESC LIMIT %s""",
+                    (list(allowed), team_usernames, limit),
+                )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    return {
+        "acknowledgements": [
+            {
+                "id": r["id"], "eventid": r["eventid"], "problem_name": r["problem_name"],
+                "hostname": r["hostname"], "severity": r["severity"], "acknowledged_by": r["acknowledged_by"],
+                "note": r["note"], "acked_at": r["acked_at"].isoformat(),
+            }
+            for r in rows
+        ]
+    }
+
+
+@app.get("/metrics/problems/history", tags=["Metrics"], summary="Historical problems in a time window")
+def get_problem_history(
+    hours: int = Query(24, ge=1, le=720),
+    severity_min: int = Query(0, ge=0, le=5),
+    limit: int = Query(500, ge=1, le=1000),
+    current_user: dict = Depends(get_current_user),
+):
+    """Return historical Zabbix problems (active + resolved) for the given window.
+    Team-isolated — root/auditor see all hosts, others see only their team.
+    """
+    allowed = _team_hostname_filter(current_user)
+    return {
+        "problems": metrics_bot.get_problem_history(
+            hours=hours,
+            hostname_filter=allowed,
+            severity_min=severity_min,
+            limit=limit,
+        )
+    }
 
 
 @app.get(
@@ -475,7 +860,7 @@ def get_item_history(
         raise HTTPException(
             status_code=400, detail="minutes must be between 1 and 10080"
         )
-    print(f"📊 history request: item={itemid} minutes={minutes}")
+    logger.debug("history request: item=%s minutes=%d", itemid, minutes)
     return metrics_bot.get_item_history(itemid, minutes)
 
 
@@ -510,6 +895,192 @@ def add_trigger(data: TriggerRequest, current_user: dict = Depends(require_opera
     return {"message": "Trigger added successfully.", "triggerid": trigger_id}
 
 
+@app.post("/items/http", tags=["Items"], summary="Add HTTP Agent Item", status_code=201)
+def add_http_item(data: HttpItemRequest, current_user: dict = Depends(require_operator)):
+    """Adds an HTTP agent item (type 19). Zabbix server fetches the URL and stores the result."""
+    team_id = _live_team_id(current_user)
+    team_name = um.get_team_name(team_id) if team_id else None
+    item_id, err = item_bot.add_http_item(
+        hostname=data.hostname, item_name=data.item_name, url=data.url,
+        item_key=data.item_key, request_method=data.request_method,
+        status_codes=data.status_codes, timeout=data.timeout,
+        verify_peer=data.verify_peer, follow_redirects=data.follow_redirects,
+        posts=data.posts, value_type=data.value_type,
+        team_name=team_name or data.team_name,
+        authtype=data.authtype, username=data.username, password=data.password,
+        regex_preprocessing=data.regex_preprocessing, regex_pattern=data.regex_pattern,
+        regex_output=data.regex_output, regex_no_match_value=data.regex_no_match_value,
+    )
+    if not item_id:
+        raise HTTPException(status_code=400, detail=err or "Failed to add HTTP item.")
+    return {"message": "HTTP item added successfully.", "itemid": item_id}
+
+
+@app.post("/items/service", tags=["Items"], summary="Add Service Check Item", status_code=201)
+def add_service_item(data: ServiceItemRequest, current_user: dict = Depends(require_operator)):
+    """Adds a simple-check service item (type 3): ICMP ping, TCP port, HTTP/HTTPS/SSH/SMTP/FTP."""
+    team_id = _live_team_id(current_user)
+    team_name = um.get_team_name(team_id) if team_id else None
+    item_id, err = item_bot.add_service_item(
+        hostname=data.hostname, service_type=data.service_type,
+        port=data.port, item_name=data.item_name,
+        team_name=team_name or data.team_name,
+    )
+    if not item_id:
+        raise HTTPException(status_code=400, detail=err or "Failed to add service item.")
+    return {"message": "Service item added successfully.", "itemid": item_id}
+
+
+@app.post("/items/filewatch", tags=["Items"], summary="Add File Watch Item", status_code=201)
+def add_file_watch_item(data: FileWatchRequest, current_user: dict = Depends(require_operator)):
+    """Creates an agent item that monitors a file property.
+    Optionally auto-creates a change-detection trigger on the same item.
+    """
+    team_id = _live_team_id(current_user)
+    team_name = um.get_team_name(team_id) if team_id else None
+    item_id, err = item_bot.add_file_watch_item(
+        hostname=data.hostname,
+        file_path=data.file_path,
+        check_type=data.check_type,
+        item_name=data.item_name,
+        team_name=team_name or data.team_name,
+        folder_os=data.folder_os,
+    )
+    if not item_id:
+        raise HTTPException(status_code=400, detail=err or "Failed to add file watch item.")
+
+    trigger_id = None
+    trigger_err = None
+    # folder_latest returns a string filename — only change triggers make sense for it
+    supports_age_trigger = data.check_type == "mtime"
+    if data.create_trigger and data.check_type != "folder_latest":
+        if data.trigger_type == "age" and supports_age_trigger:
+            trigger_name = data.trigger_name or f"File not updated in {data.max_age_minutes}m: {data.file_path} on {{HOST.NAME}}"
+            trigger_id, trigger_err = item_bot.add_file_age_trigger(
+                hostname=data.hostname,
+                file_path=data.file_path,
+                trigger_name=trigger_name,
+                max_age_minutes=data.max_age_minutes,
+                priority=data.trigger_priority,
+            )
+        else:
+            key_map = {
+                "checksum": f"vfs.file.md5sum[{data.file_path}]",
+                "mtime":    f"vfs.file.time[{data.file_path},modify]",
+                "size":     f"vfs.file.size[{data.file_path}]",
+                "exists":   f"vfs.file.exists[{data.file_path}]",
+            }
+            item_key = key_map.get(data.check_type, "")
+            trigger_name = data.trigger_name or f"File changed: {data.file_path} on {{HOST.NAME}}"
+            trigger_id, trigger_err = item_bot.add_change_trigger(
+                hostname=data.hostname,
+                item_key=item_key,
+                trigger_name=trigger_name,
+                priority=data.trigger_priority,
+            )
+
+    return {
+        "message": "File watch item added successfully.",
+        "itemid": item_id,
+        "triggerid": trigger_id,
+        "trigger_error": trigger_err,
+    }
+
+
+@app.post("/items/script", tags=["Items"], summary="Add Script Check Item", status_code=201)
+def add_script_item(data: ScriptItemRequest, current_user: dict = Depends(require_operator)):
+    """Adds an agent item that runs a bash or PowerShell script via system.run[].
+    Requires EnableRemoteCommands=1 in the Zabbix agent config on the target host.
+    """
+    team_id = _live_team_id(current_user)
+    team_name = um.get_team_name(team_id) if team_id else None
+    item_id, err = item_bot.add_script_item(
+        hostname=data.hostname,
+        script_type=data.script_type,
+        script_mode=data.script_mode,
+        script=data.script,
+        file_arg=data.file_arg,
+        item_name=data.item_name,
+        value_type=data.value_type,
+        team_name=team_name or data.team_name,
+    )
+    if not item_id:
+        raise HTTPException(status_code=400, detail=err or "Failed to add script item.")
+    return {"message": "Script item added successfully.", "itemid": item_id}
+
+
+@app.post("/items/db/odbc", tags=["Items"], summary="Add ODBC database monitor item", status_code=201)
+def add_db_odbc_item(data: DbOdbcRequest, current_user: dict = Depends(require_operator)):
+    """Adds a Zabbix ODBC database monitor item (type 4). Requires an ODBC DSN configured on the Zabbix server."""
+    allowed = _team_hostname_filter(current_user)
+    if allowed is not None and data.hostname not in allowed:
+        raise HTTPException(status_code=403, detail="Host not in your team.")
+    team_id = _live_team_id(current_user)
+    team_name = um.get_team_name(team_id) if team_id else ""
+    item_id, err = item_bot.add_db_odbc_item(
+        hostname=data.hostname,
+        dsn=data.dsn,
+        sql_query=data.sql_query,
+        description=data.description,
+        item_name=data.item_name,
+        value_type=data.value_type,
+        username=data.username,
+        password=data.password,
+        team_name=team_name,
+    )
+    if not item_id:
+        raise HTTPException(status_code=400, detail=err or "Failed to add ODBC item.")
+    return {"message": "ODBC item added.", "itemid": item_id}
+
+
+@app.post("/items/db/agent2", tags=["Items"], summary="Add Agent2 database plugin item", status_code=201)
+def add_db_agent2_item(data: DbAgent2Request, current_user: dict = Depends(require_operator)):
+    """Adds a Zabbix Agent2 database plugin item. Requires Zabbix Agent2 with the relevant DB plugin on the host."""
+    allowed = _team_hostname_filter(current_user)
+    if allowed is not None and data.hostname not in allowed:
+        raise HTTPException(status_code=403, detail="Host not in your team.")
+    team_id = _live_team_id(current_user)
+    team_name = um.get_team_name(team_id) if team_id else ""
+    item_id, err = item_bot.add_db_agent2_item(
+        hostname=data.hostname,
+        engine=data.engine,
+        conn_string=data.conn_string,
+        metric=data.metric,
+        item_name=data.item_name,
+        extra_param=data.extra_param,
+        value_type=data.value_type,
+        team_name=team_name,
+    )
+    if not item_id:
+        raise HTTPException(status_code=400, detail=err or "Failed to add Agent2 DB item.")
+    return {"message": "Agent2 DB item added.", "itemid": item_id}
+
+
+@app.post("/items/bulk", tags=["Items"], summary="Bulk Add Item to Multiple Hosts", status_code=201)
+def bulk_add_items(data: BulkItemRequest, current_user: dict = Depends(require_operator)):
+    """Adds the same item (agent, HTTP agent, or service check) to multiple hosts in one call."""
+    if not data.hostnames:
+        raise HTTPException(status_code=400, detail="hostnames list is empty.")
+    team_id = _live_team_id(current_user)
+    team_name = um.get_team_name(team_id) if team_id else ""
+    config = data.model_dump(exclude={"hostnames"})
+    config["team_name"] = team_name or config.get("team_name", "")
+    results = item_bot.bulk_add_items(data.hostnames, config)
+    ok = sum(1 for r in results if not r["error"])
+    return {"message": f"{ok}/{len(results)} items added successfully.", "results": results}
+
+
+@app.post("/triggers/bulk", tags=["Triggers"], summary="Bulk Add Trigger to Multiple Hosts", status_code=201)
+def bulk_add_triggers(data: BulkTriggerRequest, current_user: dict = Depends(require_operator)):
+    """Adds the same trigger to multiple hosts in one call."""
+    if not data.hostnames:
+        raise HTTPException(status_code=400, detail="hostnames list is empty.")
+    config = data.model_dump(exclude={"hostnames"})
+    results = item_bot.bulk_add_triggers(data.hostnames, config)
+    ok = sum(1 for r in results if not r["error"])
+    return {"message": f"{ok}/{len(results)} triggers added successfully.", "results": results}
+
+
 # ── Dashboard routes ──────────────────────────────────────────────────
 
 
@@ -517,7 +1088,14 @@ def add_trigger(data: TriggerRequest, current_user: dict = Depends(require_opera
 def list_graphs(
     hostid: str | None = None, current_user: dict = Depends(get_current_user)
 ):
-    return {"graphs": dashboard_bot.get_graphs(hostid)}
+    allowed = _team_hostname_filter(current_user)
+    graphs = dashboard_bot.get_graphs(hostid)
+    if allowed is not None:
+        graphs = [
+            g for g in graphs
+            if any(h.get("host") in allowed for h in g.get("hosts", []))
+        ]
+    return {"graphs": graphs}
 
 
 @app.get(
@@ -563,14 +1141,22 @@ def get_graph_data(
     summary="Last metric values for all hosts",
 )
 def get_hosts_metrics(current_user: dict = Depends(get_current_user)):
-    return {"hosts": dashboard_bot.get_hosts_metrics()}
+    allowed = _team_hostname_filter(current_user)
+    hosts = dashboard_bot.get_hosts_metrics()
+    if allowed is not None:
+        hosts = [h for h in hosts if h.get("hostname") in allowed]
+    return {"hosts": hosts}
 
 
 @app.get(
     "/dashboard/items/recent", tags=["Dashboard"], summary="Recently created items"
 )
 def get_recent_items(limit: int = 30, current_user: dict = Depends(get_current_user)):
-    return {"items": dashboard_bot.get_recent_items(min(limit, 100))}
+    allowed = _team_hostname_filter(current_user)
+    items = dashboard_bot.get_recent_items(min(limit, 100))
+    if allowed is not None:
+        items = [i for i in items if i.get("hostname") in allowed]
+    return {"items": items}
 
 
 class DashboardLayoutRequest(BaseModel):
@@ -655,10 +1241,13 @@ class UserUpdateRequest(BaseModel):
 
 
 @app.post("/auth/login", tags=["Auth"], summary="Login")
-def login(data: LoginRequest):
+@_limiter.limit("10/minute")  # brute-force protection — 10 attempts per IP per minute
+def login(request: Request, data: LoginRequest):
     user = um.get_user_by_username(data.username)
     if not user or not verify_password(data.password, user["password_hash"]):
+        logger.warning("Failed login attempt for username %r from %s.", data.username, request.client.host if request.client else "unknown")
         raise HTTPException(status_code=401, detail="Invalid username or password.")
+    logger.info("User %r logged in (roles=%s) from %s.", data.username, user["roles"], request.client.host if request.client else "unknown")
     token = create_token(user["id"], user["username"], user["roles"], user["team_id"])
     return {
         "access_token": token,
@@ -888,6 +1477,15 @@ class AlertRuleCreate(BaseModel):
     severity: int = 2
 
 
+class AlertRuleUpdate(BaseModel):
+    operator: str
+    threshold: float
+    severity: int
+    item_id: str | None = None
+    item_name: str | None = None
+    hostname: str | None = None
+
+
 @app.get("/alerts/rules", tags=["Alerts"], summary="List alert rules for current user")
 def list_alert_rules(current_user: dict = Depends(get_current_user)):
     return {"rules": alert_bot.get_rules(int(current_user["sub"]))}
@@ -904,6 +1502,22 @@ def create_alert_rule(data: AlertRuleCreate, current_user: dict = Depends(get_cu
         data.hostname, data.operator, data.threshold, data.severity,
     )
     return result
+
+
+@app.put("/alerts/rules/{rule_id}", tags=["Alerts"], summary="Update alert rule")
+def update_alert_rule(
+    rule_id: int, data: AlertRuleUpdate, current_user: dict = Depends(get_current_user)
+):
+    if data.operator not in (">", "<", ">=", "<="):
+        raise HTTPException(status_code=400, detail="operator must be >, <, >=, or <=")
+    if not (0 <= data.severity <= 5):
+        raise HTTPException(status_code=400, detail="severity must be 0–5")
+    if not alert_bot.update_rule(
+        rule_id, int(current_user["sub"]), data.operator, data.threshold, data.severity,
+        data.item_id, data.item_name, data.hostname,
+    ):
+        raise HTTPException(status_code=404, detail="Rule not found.")
+    return {"message": "Rule updated."}
 
 
 @app.delete("/alerts/rules/{rule_id}", tags=["Alerts"], summary="Delete alert rule")
