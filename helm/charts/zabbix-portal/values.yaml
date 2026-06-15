@@ -34,7 +34,7 @@ backend:
   #     --from-literal=DATABASE_URL=postgresql://user:pass@host:5432/db \
   #     -n <namespace>
   existingSecret: "backend-secret"      # pre-existing Secret with: ZABBIX_URL, ZABBIX_USER, ZABBIX_PASS, SECRET_KEY, DATABASE_URL
-  existingConfigMap: "zabbix-portal-backend-config"   # pre-existing ConfigMap with: ALLOWED_ORIGINS, BACKEND_URL
+  existingConfigMap: "overwatch-config-map"   # pre-existing ConfigMap with: ALLOWED_ORIGINS, BACKEND_URL
 
   env: {}
 
