@@ -73,6 +73,7 @@ import {
   type WidgetConfig,
   api,
 } from "../app/api";
+import { SearchableSelect } from "../components/SearchableSelect";
 
 const GridLayout = WidthProvider(ReactGridLayout);
 
@@ -306,7 +307,7 @@ const ChartJsGraph = ({
         .getDashboardGraphData(graphid, minutes)
         .then((res) => { if (!cancelled) { setData(res); setRefreshing(false); } })
         .catch(() => { if (!cancelled) setRefreshing(false); });
-    }, 30_000);
+    }, 10_000);
 
     return () => {
       cancelled = true;
@@ -581,6 +582,13 @@ const ChartJsGraph = ({
         border: { display: false },
       },
       y: {
+        title: {
+          display: !!unitsLabel,
+          text: unitsLabel,
+          color: tickColor,
+          font: { size: 9 },
+          padding: { top: 0, bottom: 2 },
+        },
         ticks: {
           color: tickColor,
           font: { size: 10 },
@@ -804,7 +812,7 @@ const AddGraphDialog = ({
           </FormControl>
           <FormControl size="small" fullWidth>
             <InputLabel>Host *</InputLabel>
-            <Select
+            <SearchableSelect
               label="Host *"
               value={selectedHostId}
               onChange={(e) => {
@@ -820,7 +828,7 @@ const AddGraphDialog = ({
                   {h.host}
                 </MenuItem>
               ))}
-            </Select>
+            </SearchableSelect>
           </FormControl>
         </Box>
 
@@ -1047,7 +1055,7 @@ const GraphConfigDialog = ({
             <Stack spacing={1.5}>
               <FormControl size="small" fullWidth>
                 <InputLabel>Host</InputLabel>
-                <Select
+                <SearchableSelect
                   label="Host"
                   value={newHostId}
                   onChange={(e) => setNewHostId(e.target.value)}
@@ -1062,7 +1070,7 @@ const GraphConfigDialog = ({
                       {h.host}
                     </MenuItem>
                   ))}
-                </Select>
+                </SearchableSelect>
               </FormControl>
               {newHostId && (
                 <FormControl size="small" fullWidth>
@@ -1274,7 +1282,7 @@ const GraphsTab = () => {
         .catch(() => {});
     };
     fetchEvents();
-    const timer = setInterval(fetchEvents, 30_000);
+    const timer = setInterval(fetchEvents, 10_000);
     return () => clearInterval(timer);
   }, []);
 
@@ -1524,7 +1532,7 @@ const HostMetricsTab = () => {
 
   useEffect(() => {
     load();
-    const t = setInterval(() => load(true), 15_000);
+    const t = setInterval(() => load(true), 10_000);
     return () => clearInterval(t);
   }, [load]);
 
@@ -1719,18 +1727,22 @@ const RecentItemsTab = () => {
                       {VALUE_TYPE_LABELS[item.value_type] ?? item.value_type}
                     </Typography>
                   </TableCell>
-                  <TableCell>
-                    <Typography
-                      variant="body2"
-                      sx={{
-                        fontSize: "0.72rem",
-                        fontFamily: "monospace",
-                        color: "text.secondary",
-                        wordBreak: "break-all",
-                      }}
-                    >
-                      {item.key_}
-                    </Typography>
+                  <TableCell sx={{ maxWidth: 220 }}>
+                    <Tooltip title={item.key_} placement="top">
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          fontSize: "0.72rem",
+                          fontFamily: "monospace",
+                          color: "text.secondary",
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        {item.key_}
+                      </Typography>
+                    </Tooltip>
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2" sx={{ fontSize: "0.8rem", fontWeight: 500 }}>

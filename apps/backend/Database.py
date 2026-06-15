@@ -43,7 +43,7 @@ class _PooledConn:
 def _init_pool() -> None:
     global _pool
     _pool = psycopg2.pool.ThreadedConnectionPool(
-        1, 10, _DATABASE_URL, cursor_factory=RealDictCursor
+        2, 20, _DATABASE_URL, cursor_factory=RealDictCursor
     )
 
 
@@ -164,6 +164,8 @@ CREATE INDEX IF NOT EXISTS idx_alert_events_fired_at  ON alert_events(fired_at D
 CREATE INDEX IF NOT EXISTS idx_dashboard_layouts_owner ON dashboard_layouts(owner_type, owner_id, page);
 CREATE INDEX IF NOT EXISTS idx_problem_acks_eventid  ON problem_acknowledgements(eventid);
 CREATE INDEX IF NOT EXISTS idx_problem_acks_acked_at ON problem_acknowledgements(acked_at DESC);
+CREATE INDEX IF NOT EXISTS idx_team_users_team_id    ON team_users(team_id);
+CREATE INDEX IF NOT EXISTS idx_host_assignments_team_id ON host_assignments(team_id);
 
 DELETE FROM alert_events WHERE fired_at < NOW() - INTERVAL '90 days';
 """

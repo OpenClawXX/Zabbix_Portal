@@ -21,7 +21,10 @@ class Metrics_Manager(Zabbix_Base):
         logger.info("Metrics Manager ready.")
 
     def get_problems(self) -> list[dict]:
-        """Return active problems enriched with host name and age."""
+        """Return active problems enriched with host name and age (30 s TTL cache)."""
+        return self._cached("problems", 30.0, self._fetch_problems)
+
+    def _fetch_problems(self) -> list[dict]:
         if not self.zapi:
             return []
         try:
@@ -92,6 +95,7 @@ class Metrics_Manager(Zabbix_Base):
                 action=6,
                 message=" — ".join(parts),
             )
+            self._invalidate("problems")
             return True
         except Exception as e:
             logger.error("acknowledge_problem failed for eventid=%s: %r", eventid, e)
@@ -154,6 +158,24 @@ class Metrics_Manager(Zabbix_Base):
             )
             trigger_map = {t["triggerid"]: t for t in triggers}
 
+            # Batch-resolve Zabbix userids → usernames for all acknowledge entries
+            all_userids = {
+                ack.get("userid", "")
+                for e in events
+                for ack in (e.get("acknowledges") or [])
+                if ack.get("userid")
+            }
+            userid_to_username: dict[str, str] = {}
+            if all_userids:
+                try:
+                    zabbix_users = self.zapi.user.get(
+                        userids=list(all_userids),
+                        output=["userid", "username"],
+                    )
+                    userid_to_username = {u["userid"]: u["username"] for u in zabbix_users}
+                except Exception:
+                    pass
+
             now = int(time.time())
             result = []
             for e in events:
@@ -175,8 +197,8 @@ class Metrics_Manager(Zabbix_Base):
                 duration = (r_clock - clock) if resolved else (now - clock)
 
                 acks = e.get("acknowledges") or []
-                # "username" is not returned by event.get acknowledges; use userid as fallback
-                ack_user = acks[-1].get("username") or acks[-1].get("alias") or acks[-1].get("userid", "") if acks else None
+                raw_userid = acks[-1].get("userid", "") if acks else ""
+                ack_user = userid_to_username.get(raw_userid, raw_userid) if acks else None
                 ack_note = acks[-1].get("message", "") if acks else ""
                 ack_time = int(acks[-1].get("clock", 0)) if acks else None
 
@@ -208,12 +230,14 @@ class Metrics_Manager(Zabbix_Base):
             items = self.zapi.item.get(
                 itemids=[itemid],
                 output=["itemid", "name", "value_type", "units"],
+                selectHosts=["host"],
             )
             if not items:
-                return {"history": [], "item_name": "", "units": ""}
+                return {"history": [], "item_name": "", "units": "", "hostname": ""}
 
             item = items[0]
             value_type = int(item["value_type"])
+            hostname = (item.get("hosts") or [{}])[0].get("host", "")
 
             # Only float (0) and integer (3) can be graphed meaningfully
             if value_type not in (0, 3):
@@ -221,6 +245,7 @@ class Metrics_Manager(Zabbix_Base):
                     "history": [],
                     "item_name": item["name"],
                     "units": item.get("units", ""),
+                    "hostname": hostname,
                 }
 
             time_till = int(time.time())
@@ -265,7 +290,8 @@ class Metrics_Manager(Zabbix_Base):
                 "history": points,
                 "item_name": item["name"],
                 "units": item.get("units", ""),
+                "hostname": hostname,
             }
         except Exception as e:
             logger.error("get_item_history failed: %r", e)
-            return {"history": [], "item_name": "", "units": ""}
+            return {"history": [], "item_name": "", "units": "", "hostname": ""}

@@ -688,6 +688,7 @@ class ZabbixSync(Zabbix_Base):
         from Database import _DATABASE_URL
 
         def _listen():
+            conn = None
             try:
                 conn = psycopg2.connect(_DATABASE_URL)
                 conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
@@ -707,6 +708,12 @@ class ZabbixSync(Zabbix_Base):
                                 logger.error("ZabbixSync realtime sync error: %r", exc)
             except Exception as exc:
                 logger.error("ZabbixSync real-time listener crashed: %r", exc)
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
 
         t = threading.Thread(target=_listen, daemon=True, name="zabbix-notify-listener")
         t.start()

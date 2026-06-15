@@ -1,5 +1,8 @@
 "use client";
 import AddIcon from "@mui/icons-material/Add";
+import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
+import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
+import CloseIcon from "@mui/icons-material/Close";
 import CloudUploadOutlinedIcon from "@mui/icons-material/CloudUploadOutlined";
 import DeleteOutlineOutlinedIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import DownloadOutlinedIcon from "@mui/icons-material/DownloadOutlined";
@@ -7,6 +10,8 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import LocalOfferOutlinedIcon from "@mui/icons-material/LocalOfferOutlined";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import RouterOutlinedIcon from "@mui/icons-material/RouterOutlined";
+import StarIcon from "@mui/icons-material/Star";
+import WarningAmberOutlinedIcon from "@mui/icons-material/WarningAmberOutlined";
 import {
   Accordion,
   AccordionDetails,
@@ -17,13 +22,22 @@ import {
   Button,
   Card,
   Chip,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
   Divider,
+  Drawer,
+  FormControl,
   IconButton,
+  InputLabel,
   LinearProgress,
+  List,
+  ListItem,
+  Menu,
+  MenuItem,
+  Select,
   Snackbar,
   Stack,
   TextField,
@@ -34,7 +48,9 @@ import { useTheme } from "@mui/material/styles";
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { type Host, type HostInterface, type HostTag, api } from "../app/api";
+import { SearchableSelect } from "../components/SearchableSelect";
 import { useSync } from "../app/context/SyncContext";
+import { useFavorites } from "../lib/favorites";
 
 const IFACE_BADGE: Record<string, string> = {
   "1": "ZBX",
@@ -117,6 +133,10 @@ export const Hosts = () => {
   const [ip, setIp] = useState("");
   const [template, setTemplate] = useState("Linux by Zabbix agent");
   const [templates, setTemplates] = useState<Array<{ templateid: string; name: string }>>([]);
+  const [proxyid, setProxyid] = useState("");
+  const [proxies, setProxies] = useState<Array<{ proxyid: string; name: string }>>([]);
+  const [groupIds, setGroupIds] = useState<string[]>([]);
+  const [hostGroups, setHostGroups] = useState<Array<{ groupid: string; name: string }>>([]);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
@@ -131,6 +151,37 @@ export const Hosts = () => {
   const [toast, setToast] = useState<{ open: boolean; message: string; severity: "success" | "error" }>({
     open: false, message: "", severity: "success",
   });
+
+  // ── Export menu ─────────────────────────────────────────────────────
+  const [exportAnchor, setExportAnchor] = useState<null | HTMLElement>(null);
+
+  // ── Host detail drawer ──────────────────────────────────────────────
+  const [selectedHost, setSelectedHost] = useState<Host | null>(null);
+  const [drawerLoading, setDrawerLoading] = useState(false);
+  type DrawerItem = { itemid: string; name: string; key_: string; lastvalue: string; lastclock: number | null };
+  type DrawerTrigger = { triggerid: string; description: string; priority: number; value: number; lastchange: number; status: number };
+  const [drawerItems, setDrawerItems] = useState<DrawerItem[]>([]);
+  const [drawerTriggers, setDrawerTriggers] = useState<DrawerTrigger[]>([]);
+  const { isFav: isFavItem } = useFavorites("favorite_items");
+  const { isFav: isFavTrigger } = useFavorites("favorite_triggers");
+
+  const openDrawer = useCallback(async (host: Host) => {
+    setSelectedHost(host);
+    setDrawerItems([]);
+    setDrawerTriggers([]);
+    setDrawerLoading(true);
+    try {
+      const [itemsRes, triggersRes] = await Promise.all([
+        api.listAllItems({ hostname: host.host }),
+        api.listAllTriggers({ hostname: host.host }),
+      ]);
+      setDrawerItems(itemsRes.items);
+      setDrawerTriggers(triggersRes.triggers);
+    } catch { /* non-critical — drawer shows empty state */ }
+    finally { setDrawerLoading(false); }
+  }, []);
+
+  const closeDrawer = useCallback(() => { setSelectedHost(null); }, []);
 
   const showToast = useCallback((message: string, severity: "success" | "error") => {
     setToast({ open: true, message, severity });
@@ -153,14 +204,18 @@ export const Hosts = () => {
 
   useEffect(() => {
     api.listTemplates().then((r) => setTemplates(r.templates)).catch(() => {});
+    api.listProxies().then((r) => setProxies(r.proxies)).catch(() => {});
+    api.listHostGroups().then((r) => setHostGroups(r.groups)).catch(() => {});
   }, []);
 
   const onCreate = async () => {
     try {
-      await api.createHost({ hostname, ip, template });
+      await api.createHost({ hostname, ip, template, proxyid: proxyid || undefined, group_ids: groupIds.length ? groupIds : undefined });
       showToast("Host added successfully.", "success");
       setHostname("");
       setIp("");
+      setProxyid("");
+      setGroupIds([]);
       await reload();
     } catch (e) {
       showToast(e instanceof Error ? e.message : String(e), "error");
@@ -299,6 +354,27 @@ export const Hosts = () => {
         },
       },
       {
+        field: "proxyid",
+        headerName: "Proxy",
+        width: 140,
+        sortable: false,
+        filterable: false,
+        renderHeader: () => <Typography sx={headerSx}>Proxy</Typography>,
+        renderCell: (params) => {
+          const pid = params.value as string | undefined;
+          if (!pid || pid === "0") return <Typography variant="caption" color="text.disabled">Direct</Typography>;
+          const proxy = proxies.find((p) => p.proxyid === pid);
+          return (
+            <Chip
+              label={proxy?.name ?? pid}
+              size="small"
+              variant="outlined"
+              sx={{ height: 18, fontSize: "0.65rem" }}
+            />
+          );
+        },
+      },
+      {
         field: "availability",
         headerName: "Availability",
         width: 140,
@@ -416,7 +492,7 @@ export const Hosts = () => {
         ),
       },
     ],
-    [isDark, deleteTagInline],
+    [isDark, deleteTagInline, proxies],
   );
 
   const totalProblems = hosts.reduce((sum, h) => sum + (h.problem_count ?? 0), 0);
@@ -437,11 +513,34 @@ export const Hosts = () => {
           size="small"
           variant="outlined"
           startIcon={<DownloadOutlinedIcon />}
-          onClick={() => { window.location.href = "/api/hosts/download"; }}
+          endIcon={<ArrowDropDownIcon />}
+          onClick={(e) => setExportAnchor(e.currentTarget)}
           sx={{ flexShrink: 0 }}
         >
           Export
         </Button>
+        <Menu
+          anchorEl={exportAnchor}
+          open={Boolean(exportAnchor)}
+          onClose={() => setExportAnchor(null)}
+          anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+          transformOrigin={{ vertical: "top", horizontal: "right" }}
+        >
+          <MenuItem
+            dense
+            onClick={() => { window.location.href = "/api/hosts/download?format=xlsx"; setExportAnchor(null); }}
+          >
+            <DownloadOutlinedIcon sx={{ fontSize: 16, mr: 1, color: "text.secondary" }} />
+            Excel (.xlsx)
+          </MenuItem>
+          <MenuItem
+            dense
+            onClick={() => { window.location.href = "/api/hosts/download?format=csv"; setExportAnchor(null); }}
+          >
+            <DownloadOutlinedIcon sx={{ fontSize: 16, mr: 1, color: "text.secondary" }} />
+            CSV (.csv)
+          </MenuItem>
+        </Menu>
       </Box>
 
       {/* ── Stats strip ── */}
@@ -514,7 +613,8 @@ export const Hosts = () => {
             loading={false}
             rowHeight={58}
             columnHeaderHeight={46}
-            disableRowSelectionOnClick
+            disableRowSelectionOnClick={false}
+            onRowClick={(params) => { void openDrawer(params.row as Host); }}
             pageSizeOptions={[10, 25, 50]}
             initialState={{ pagination: { paginationModel: { pageSize: 10, page: 0 } } }}
             sx={{
@@ -534,8 +634,14 @@ export const Hosts = () => {
                 display: "flex",
                 alignItems: "center",
               },
+              "& .MuiDataGrid-row": {
+                cursor: "pointer",
+              },
               "& .MuiDataGrid-row:hover": {
                 bgcolor: isDark ? "rgba(59,130,246,0.05)" : "rgba(59,130,246,0.03)",
+              },
+              "& .MuiDataGrid-row.Mui-selected": {
+                bgcolor: isDark ? "rgba(59,130,246,0.1)" : "rgba(59,130,246,0.06)",
               },
               "& .MuiDataGrid-footerContainer": {
                 borderTop: "1px solid",
@@ -585,6 +691,44 @@ export const Hosts = () => {
               )}
               fullWidth
             />
+            {proxies.length > 0 && (
+              <FormControl size="small" fullWidth>
+                <InputLabel>Proxy (optional)</InputLabel>
+                <SearchableSelect
+                  value={proxyid}
+                  label="Proxy (optional)"
+                  onChange={(e) => setProxyid(e.target.value)}
+                >
+                  <MenuItem value="">No proxy — direct monitoring</MenuItem>
+                  {proxies.map((p) => (
+                    <MenuItem key={p.proxyid} value={p.proxyid}>{p.name}</MenuItem>
+                  ))}
+                </SearchableSelect>
+              </FormControl>
+            )}
+            {hostGroups.length > 0 && (
+              <FormControl size="small" fullWidth>
+                <InputLabel>Host groups (optional)</InputLabel>
+                <Select
+                  multiple
+                  label="Host groups (optional)"
+                  value={groupIds}
+                  onChange={(e) => setGroupIds(e.target.value as string[])}
+                  renderValue={(selected) => (
+                    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+                      {(selected as string[]).map((id) => {
+                        const g = hostGroups.find((g) => g.groupid === id);
+                        return <Chip key={id} label={g?.name ?? id} size="small" sx={{ height: 20 }} />;
+                      })}
+                    </Box>
+                  )}
+                >
+                  {hostGroups.map((g) => (
+                    <MenuItem key={g.groupid} value={g.groupid}>{g.name}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            )}
             <Box>
               <Button variant="contained" size="small" onClick={onCreate} disabled={!hostname || !ip} startIcon={<AddIcon />}>
                 Create host
@@ -758,6 +902,202 @@ export const Hosts = () => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* ── Host detail drawer ── */}
+      <Drawer
+        anchor="right"
+        open={!!selectedHost}
+        onClose={closeDrawer}
+        PaperProps={{
+          sx: {
+            width: 520,
+            bgcolor: isDark ? "#0F1E35" : "background.paper",
+            backgroundImage: "none",
+            borderLeft: "1px solid",
+            borderColor: "divider",
+          },
+        }}
+      >
+        {selectedHost && (
+          <Box sx={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            {/* Drawer header */}
+            <Box sx={{ px: 2.5, pt: 2.5, pb: 2, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}>
+              <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+                <Box>
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>
+                    <RouterOutlinedIcon sx={{ fontSize: 18, color: "primary.main" }} />
+                    <Typography variant="h6" sx={{ fontWeight: 700, fontSize: "1rem" }}>
+                      {selectedHost.host}
+                    </Typography>
+                    <Chip
+                      size="small"
+                      label={selectedHost.status === "0" ? "Enabled" : "Disabled"}
+                      sx={{
+                        height: 18,
+                        fontSize: "0.62rem",
+                        fontWeight: 700,
+                        bgcolor: selectedHost.status === "0"
+                          ? (isDark ? "rgba(22,163,74,0.18)" : "rgba(22,163,74,0.12)")
+                          : "action.hover",
+                        color: selectedHost.status === "0" ? "#16a34a" : "text.disabled",
+                        border: "none",
+                      }}
+                    />
+                  </Box>
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
+                    <AvailabilityCell interfaces={selectedHost.interfaces} />
+                    {(() => {
+                      const iface = selectedHost.interfaces?.find((i) => i.type === "1") ?? selectedHost.interfaces?.[0];
+                      return iface ? (
+                        <Typography sx={{ fontSize: "0.78rem", fontFamily: "monospace", color: "text.secondary" }}>
+                          {iface.ip}:{iface.port}
+                        </Typography>
+                      ) : null;
+                    })()}
+                    {(selectedHost.problem_count ?? 0) > 0 && (
+                      <Chip
+                        size="small"
+                        icon={<WarningAmberOutlinedIcon sx={{ fontSize: "0.75rem !important" }} />}
+                        label={`${selectedHost.problem_count} problem${selectedHost.problem_count !== 1 ? "s" : ""}`}
+                        sx={{ height: 18, fontSize: "0.62rem", fontWeight: 700, bgcolor: "rgba(220,38,38,0.15)", color: "#ef4444", border: "none" }}
+                      />
+                    )}
+                  </Box>
+                </Box>
+                <IconButton size="small" onClick={closeDrawer} sx={{ color: "text.disabled", mt: -0.5 }}>
+                  <CloseIcon sx={{ fontSize: 18 }} />
+                </IconButton>
+              </Box>
+            </Box>
+
+            {/* Drawer body */}
+            <Box sx={{ flex: 1, overflowY: "auto", px: 2.5, py: 2 }}>
+              {drawerLoading ? (
+                <Box sx={{ display: "flex", justifyContent: "center", pt: 4 }}>
+                  <CircularProgress size={28} />
+                </Box>
+              ) : (
+                <Stack spacing={2.5}>
+                  {/* Items section */}
+                  <Box>
+                    <Typography sx={{ fontSize: "0.68rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "text.disabled", mb: 1 }}>
+                      Items ({drawerItems.length})
+                    </Typography>
+                    {drawerItems.length === 0 ? (
+                      <Typography variant="caption" color="text.disabled">No items found</Typography>
+                    ) : (
+                      <List disablePadding>
+                        {[...drawerItems]
+                          .sort((a, b) => (isFavItem(b.itemid) ? 1 : 0) - (isFavItem(a.itemid) ? 1 : 0))
+                          .slice(0, 30)
+                          .map((item) => (
+                            <ListItem
+                              key={item.itemid}
+                              disablePadding
+                              sx={{
+                                py: 0.75,
+                                px: 1,
+                                mb: 0.25,
+                                borderRadius: 1.5,
+                                border: "1px solid",
+                                borderColor: "divider",
+                                bgcolor: isDark ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.01)",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "space-between",
+                              }}
+                            >
+                              <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, minWidth: 0, flex: 1 }}>
+                                {isFavItem(item.itemid) && <StarIcon sx={{ fontSize: 13, color: "#F59E0B", flexShrink: 0 }} />}
+                                <Box sx={{ minWidth: 0 }}>
+                                  <Typography noWrap sx={{ fontSize: "0.8rem", fontWeight: 500 }}>{item.name}</Typography>
+                                  <Typography noWrap sx={{ fontSize: "0.68rem", color: "text.disabled", fontFamily: "monospace" }}>{item.key_}</Typography>
+                                </Box>
+                              </Box>
+                              {item.lastvalue !== "" && (
+                                <Typography sx={{ fontSize: "0.78rem", fontFamily: "monospace", color: "primary.main", fontWeight: 600, flexShrink: 0, ml: 1 }}>
+                                  {item.lastvalue.length > 20 ? `${item.lastvalue.slice(0, 20)}…` : item.lastvalue}
+                                </Typography>
+                              )}
+                            </ListItem>
+                          ))}
+                        {drawerItems.length > 30 && (
+                          <Typography variant="caption" color="text.disabled" sx={{ pl: 1 }}>
+                            +{drawerItems.length - 30} more items — use the Items page to view all
+                          </Typography>
+                        )}
+                      </List>
+                    )}
+                  </Box>
+
+                  <Divider />
+
+                  {/* Triggers section */}
+                  <Box>
+                    <Typography sx={{ fontSize: "0.68rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "text.disabled", mb: 1 }}>
+                      Triggers ({drawerTriggers.length})
+                    </Typography>
+                    {drawerTriggers.length === 0 ? (
+                      <Typography variant="caption" color="text.disabled">No triggers found</Typography>
+                    ) : (
+                      <List disablePadding>
+                        {[...drawerTriggers]
+                          .sort((a, b) => (isFavTrigger(b.triggerid) ? 1 : 0) - (isFavTrigger(a.triggerid) ? 1 : 0))
+                          .map((trigger) => {
+                            const PRIORITY_LABEL: Record<number, { label: string; color: string }> = {
+                              0: { label: "Not classified", color: "#6B7280" },
+                              1: { label: "Info",           color: "#3B82F6" },
+                              2: { label: "Warning",        color: "#F59E0B" },
+                              3: { label: "Average",        color: "#F97316" },
+                              4: { label: "High",           color: "#EF4444" },
+                              5: { label: "Disaster",       color: "#DC2626" },
+                            };
+                            const prio = PRIORITY_LABEL[trigger.priority] ?? PRIORITY_LABEL[0];
+                            const isProblem = trigger.value === 1;
+                            return (
+                              <ListItem
+                                key={trigger.triggerid}
+                                disablePadding
+                                sx={{
+                                  py: 0.75,
+                                  px: 1,
+                                  mb: 0.25,
+                                  borderRadius: 1.5,
+                                  border: "1px solid",
+                                  borderColor: isProblem ? "rgba(220,38,38,0.3)" : "divider",
+                                  bgcolor: isProblem
+                                    ? (isDark ? "rgba(220,38,38,0.07)" : "rgba(220,38,38,0.04)")
+                                    : (isDark ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.01)"),
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "space-between",
+                                  gap: 1,
+                                }}
+                              >
+                                <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, minWidth: 0, flex: 1 }}>
+                                  {isFavTrigger(trigger.triggerid) && <StarIcon sx={{ fontSize: 13, color: "#F59E0B", flexShrink: 0 }} />}
+                                  {isProblem
+                                    ? <WarningAmberOutlinedIcon sx={{ fontSize: 15, color: "#EF4444", flexShrink: 0 }} />
+                                    : <CheckCircleOutlineIcon sx={{ fontSize: 15, color: "#16a34a", flexShrink: 0 }} />}
+                                  <Typography noWrap sx={{ fontSize: "0.8rem", fontWeight: 500 }}>{trigger.description}</Typography>
+                                </Box>
+                                <Chip
+                                  size="small"
+                                  label={prio.label}
+                                  sx={{ height: 16, fontSize: "0.6rem", fontWeight: 700, bgcolor: `${prio.color}22`, color: prio.color, border: "none", flexShrink: 0 }}
+                                />
+                              </ListItem>
+                            );
+                          })}
+                      </List>
+                    )}
+                  </Box>
+                </Stack>
+              )}
+            </Box>
+          </Box>
+        )}
+      </Drawer>
 
       <Snackbar
         open={toast.open}

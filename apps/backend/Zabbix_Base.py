@@ -1,6 +1,9 @@
 import logging
 import os
+import threading
+import time
 from pathlib import Path
+from typing import Any, Callable
 
 import requests
 from dotenv import load_dotenv
@@ -11,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 class Zabbix_Base:
     def __init__(self):
+        self._cache: dict[str, tuple[float, Any]] = {}
+        self._cache_lock = threading.Lock()
         dotenv_path = Path(__file__).resolve().parent / ".env"
         load_dotenv(dotenv_path=dotenv_path, override=False)
 
@@ -65,6 +70,21 @@ class Zabbix_Base:
                 continue
         logger.warning("Could not probe Zabbix API — falling back to %s", candidates[0])
         return candidates[0]
+
+    def _cached(self, key: str, ttl: float, fn: Callable[[], Any]) -> Any:
+        """Return cached value if still within TTL, otherwise call fn() and store."""
+        with self._cache_lock:
+            entry = self._cache.get(key)
+            if entry is not None and time.monotonic() - entry[0] < ttl:
+                return entry[1]
+        result = fn()
+        with self._cache_lock:
+            self._cache[key] = (time.monotonic(), result)
+        return result
+
+    def _invalidate(self, key: str) -> None:
+        with self._cache_lock:
+            self._cache.pop(key, None)
 
     def close(self) -> None:
         """Cleanly logout from Zabbix. Call this explicitly on shutdown."""

@@ -5,6 +5,9 @@ import "react-resizable/css/styles.css";
 
 import AddIcon from "@mui/icons-material/Add";
 import CloseIcon from "@mui/icons-material/Close";
+import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import KeyboardArrowRightIcon from "@mui/icons-material/KeyboardArrowRight";
+import WifiOffIcon from "@mui/icons-material/WifiOff";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import PlayArrowOutlinedIcon from "@mui/icons-material/PlayArrowOutlined";
@@ -24,6 +27,7 @@ import {
   Checkbox,
   Chip,
   CircularProgress,
+  Collapse,
   Dialog,
   DialogActions,
   DialogContent,
@@ -41,16 +45,15 @@ import {
   Paper,
   Select,
   Skeleton,
+  Snackbar,
   Stack,
   Switch,
-  Tab,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
-  Tabs,
   TextField,
   Tooltip,
   Typography,
@@ -68,7 +71,8 @@ import {
   Title,
 } from "chart.js";
 import ZoomPlugin from "chartjs-plugin-zoom";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../app/context/AuthContext";
 import {
   type CustomSound,
@@ -87,6 +91,7 @@ import {
   type Problem,
   api,
 } from "../app/api";
+import { SearchableSelect } from "../components/SearchableSelect";
 
 const GridLayout = WidthProvider(ReactGridLayout);
 
@@ -293,7 +298,7 @@ const ItemChart = ({
         .getItemHistory(itemid, minutes)
         .then((res) => { if (!cancelled) { setData(res); setRefreshing(false); } })
         .catch(() => { if (!cancelled) setRefreshing(false); });
-    }, 30_000);
+    }, 10_000);
 
     return () => {
       cancelled = true;
@@ -518,6 +523,13 @@ const ItemChart = ({
         border: { display: false },
       },
       y: {
+        title: {
+          display: !!(data?.units),
+          text: data?.units ?? "",
+          color: tickColor,
+          font: { size: 9 },
+          padding: { top: 0, bottom: 2 },
+        },
         ticks: { color: tickColor, font: { size: 10 }, padding: 6, maxTicksLimit: 5 },
         grid: { color: gridColor, drawTicks: false },
         border: { display: false },
@@ -540,12 +552,32 @@ const ItemChart = ({
         position: "relative",
       }}
     >
+      {/* Hostname label */}
+      {data?.hostname && (
+        <Typography
+          variant="caption"
+          sx={{
+            position: "absolute",
+            top: 7,
+            left: 10,
+            fontSize: "0.65rem",
+            fontWeight: 600,
+            color: tickColor,
+            opacity: 0.85,
+            zIndex: 1,
+            userSelect: "none",
+            letterSpacing: 0,
+          }}
+        >
+          {data.hostname}
+        </Typography>
+      )}
       {/* Time range label — always visible so the user can confirm the filter changed */}
       <Typography
         variant="caption"
         sx={{
           position: "absolute",
-          top: 7,
+          top: data?.hostname ? 20 : 7,
           left: 10,
           fontSize: "0.58rem",
           color: tickColor,
@@ -653,7 +685,7 @@ const AddMetricDialog = ({
         <Box sx={{ p: 2 }}>
           <FormControl size="small" fullWidth>
             <InputLabel>Host</InputLabel>
-            <Select
+            <SearchableSelect
               label="Host"
               value={selectedHost}
               onChange={(e) => setSelectedHost(e.target.value)}
@@ -663,7 +695,7 @@ const AddMetricDialog = ({
                   {h.host}
                 </MenuItem>
               ))}
-            </Select>
+            </SearchableSelect>
           </FormControl>
         </Box>
         <Divider />
@@ -884,7 +916,7 @@ const MetricConfigDialog = ({
             <Stack spacing={1.5}>
               <FormControl size="small" fullWidth>
                 <InputLabel>Host</InputLabel>
-                <Select
+                <SearchableSelect
                   label="Host"
                   value={newHostname}
                   onChange={(e) => setNewHostname(e.target.value)}
@@ -899,12 +931,12 @@ const MetricConfigDialog = ({
                       {h.host}
                     </MenuItem>
                   ))}
-                </Select>
+                </SearchableSelect>
               </FormControl>
               {newHostname && (
                 <FormControl size="small" fullWidth>
                   <InputLabel>Item</InputLabel>
-                  <Select
+                  <SearchableSelect
                     label="Item"
                     value={newItemId}
                     onChange={(e) => setNewItemId(e.target.value)}
@@ -928,7 +960,7 @@ const MetricConfigDialog = ({
                         </MenuItem>
                       ))
                     )}
-                  </Select>
+                  </SearchableSelect>
                 </FormControl>
               )}
             </Stack>
@@ -1104,6 +1136,7 @@ const ProblemsTab = () => {
   const [hostFilter, setHostFilter] = useState("");
   const [hosts, setHosts] = useState<Host[]>([]);
   const [acknowledging, setAcknowledging] = useState<Set<string>>(new Set());
+  const [expandedProblemId, setExpandedProblemId] = useState<string | null>(null);
 
   // Ack dialog state
   const [ackTarget, setAckTarget] = useState<Problem | null>(null);
@@ -1140,6 +1173,7 @@ const ProblemsTab = () => {
             : p,
         ),
       );
+      window.dispatchEvent(new Event("problemAcknowledged"));
     } catch {
       // no-op — button re-enables so user can retry
     } finally {
@@ -1153,7 +1187,7 @@ const ProblemsTab = () => {
 
   useEffect(() => {
     loadProblems();
-    const timer = setInterval(loadProblems, 30_000);
+    const timer = setInterval(loadProblems, 10_000);
     return () => clearInterval(timer);
   }, [loadProblems]);
 
@@ -1196,7 +1230,7 @@ const ProblemsTab = () => {
         <Box sx={{ flex: 1 }} />
         <FormControl size="small" sx={{ minWidth: 180 }}>
           <InputLabel sx={{ fontSize: "0.78rem" }}>Filter by host</InputLabel>
-          <Select
+          <SearchableSelect
             label="Filter by host"
             value={hostFilter}
             onChange={(e) => setHostFilter(e.target.value)}
@@ -1210,7 +1244,7 @@ const ProblemsTab = () => {
                 {h.host}
               </MenuItem>
             ))}
-          </Select>
+          </SearchableSelect>
         </FormControl>
         <Tooltip title="Refresh">
           <IconButton size="small" onClick={loadProblems} disabled={loading}>
@@ -1272,14 +1306,12 @@ const ProblemsTab = () => {
         <Table size="small">
           <TableHead>
             <TableRow>
-              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 130 }}>
-                Severity
-              </TableCell>
+              <TableCell sx={{ width: 28, pr: 0 }} />
+              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 130 }}>Severity</TableCell>
               <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 160 }}>Host</TableCell>
               <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem" }}>Problem</TableCell>
-              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 90 }}>
-                Duration
-              </TableCell>
+              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 120 }}>Time</TableCell>
+              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 90 }}>Duration</TableCell>
               <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 90 }}>Ack</TableCell>
             </TableRow>
           </TableHead>
@@ -1288,7 +1320,7 @@ const ProblemsTab = () => {
               Array.from({ length: 4 }).map((_, i) => (
                 // biome-ignore lint/suspicious/noArrayIndexKey: skeleton rows
                 <TableRow key={i}>
-                  {Array.from({ length: 5 }).map((__, j) => (
+                  {Array.from({ length: 6 }).map((__, j) => (
                     // biome-ignore lint/suspicious/noArrayIndexKey: skeleton cells
                     <TableCell key={j}>
                       <Skeleton variant="text" height={20} />
@@ -1298,83 +1330,154 @@ const ProblemsTab = () => {
               ))
             ) : filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} align="center" sx={{ py: 4, color: "text.secondary" }}>
+                <TableCell colSpan={6} align="center" sx={{ py: 4, color: "text.secondary" }}>
                   {problems.length === 0 ? "No active problems" : "No problems match filters"}
                 </TableCell>
               </TableRow>
             ) : (
-              filtered.map((p) => (
-                <TableRow key={p.eventid} sx={{ "&:hover": { backgroundColor: "action.hover" } }}>
-                  <TableCell>
-                    <SeverityChip severity={p.severity} />
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2" sx={{ fontSize: "0.8rem", fontWeight: 500 }}>
-                      {p.hostname}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2" sx={{ fontSize: "0.8rem" }}>
-                      {p.name}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Typography
-                      variant="body2"
-                      sx={{ fontSize: "0.75rem", color: "text.secondary" }}
+              filtered.map((p) => {
+                const isExpanded = expandedProblemId === p.eventid;
+                return (
+                  <>
+                    <TableRow
+                      key={p.eventid}
+                      onClick={() => setExpandedProblemId(isExpanded ? null : p.eventid)}
+                      sx={{ cursor: "pointer", "&:hover": { backgroundColor: "action.hover" } }}
                     >
-                      {formatAge(p.age_seconds)}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    {p.acknowledged ? (
-                      <Tooltip
-                        title={
-                          p.ack_user ? (
-                            <Box>
-                              <Typography variant="caption" sx={{ display: "block", fontWeight: 700 }}>
-                                Acknowledged by {p.ack_user}
-                              </Typography>
-                              {p.ack_time && (
-                                <Typography variant="caption" sx={{ display: "block" }}>
-                                  {new Date(p.ack_time).toLocaleString()}
-                                </Typography>
-                              )}
-                              {p.ack_note && (
-                                <Typography variant="caption" sx={{ display: "block", fontStyle: "italic", mt: 0.25 }}>
-                                  "{p.ack_note}"
-                                </Typography>
+                      <TableCell sx={{ width: 28, pr: 0 }}>
+                        <IconButton size="small" sx={{ p: 0.25 }}>
+                          {isExpanded
+                            ? <KeyboardArrowDownIcon sx={{ fontSize: 16 }} />
+                            : <KeyboardArrowRightIcon sx={{ fontSize: 16 }} />}
+                        </IconButton>
+                      </TableCell>
+                      <TableCell>
+                        <SeverityChip severity={p.severity} />
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2" sx={{ fontSize: "0.8rem", fontWeight: 500 }}>
+                          {p.hostname}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2" sx={{ fontSize: "0.8rem" }}>
+                          {p.name}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Tooltip title={new Date(p.clock * 1000).toLocaleString()}>
+                          <Typography variant="body2" sx={{ fontSize: "0.75rem", color: "text.secondary" }}>
+                            {new Date(p.clock * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          </Typography>
+                        </Tooltip>
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2" sx={{ fontSize: "0.75rem", color: "text.secondary" }}>
+                          {formatAge(p.age_seconds)}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        {p.acknowledged ? (
+                          <Tooltip
+                            title={
+                              p.ack_user ? (
+                                <Box>
+                                  <Typography variant="caption" sx={{ display: "block", fontWeight: 700 }}>
+                                    Acknowledged by {p.ack_user}
+                                  </Typography>
+                                  {p.ack_time && (
+                                    <Typography variant="caption" sx={{ display: "block" }}>
+                                      {new Date(p.ack_time).toLocaleString()}
+                                    </Typography>
+                                  )}
+                                  {p.ack_note && (
+                                    <Typography variant="caption" sx={{ display: "block", fontStyle: "italic", mt: 0.25 }}>
+                                      "{p.ack_note}"
+                                    </Typography>
+                                  )}
+                                </Box>
+                              ) : "Acknowledged"
+                            }
+                          >
+                            <Chip
+                              label={p.ack_user ? `Ack'd by ${p.ack_user}` : "Ack'd"}
+                              size="small"
+                              color="success"
+                              variant="outlined"
+                              sx={{ height: 20, fontSize: "0.68rem" }}
+                            />
+                          </Tooltip>
+                        ) : (
+                          <Tooltip title="Acknowledge this problem">
+                            <span>
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                onClick={(e) => { e.stopPropagation(); setAckTarget(p); setAckNote(""); }}
+                                disabled={acknowledging.has(p.eventid)}
+                                sx={{ fontSize: "0.68rem", height: 20, minWidth: 50, px: 1 }}
+                              >
+                                {acknowledging.has(p.eventid) ? "…" : "Ack"}
+                              </Button>
+                            </span>
+                          </Tooltip>
+                        )}
+                      </TableCell>
+                    </TableRow>
+
+                    {/* Expanded detail row */}
+                    <TableRow key={`${p.eventid}-detail`}>
+                      <TableCell colSpan={7} sx={{ py: 0, border: isExpanded ? undefined : "none" }}>
+                        <Collapse in={isExpanded} timeout="auto" unmountOnExit>
+                          <Box sx={{ px: 3, py: 1.5, bgcolor: "action.hover", borderRadius: 1, my: 0.5 }}>
+                            <Typography variant="caption" sx={{ fontWeight: 700, color: "text.secondary", textTransform: "uppercase", letterSpacing: "0.07em", fontSize: "0.6rem" }}>
+                              Problem details
+                            </Typography>
+                            <Box sx={{ display: "flex", gap: 4, mt: 0.75, flexWrap: "wrap" }}>
+                              <Box>
+                                <Typography variant="caption" color="text.disabled">Host</Typography>
+                                <Typography variant="body2" sx={{ fontWeight: 600, fontSize: "0.8rem" }}>{p.hostname}</Typography>
+                              </Box>
+                              <Box>
+                                <Typography variant="caption" color="text.disabled">Started</Typography>
+                                <Typography variant="body2" sx={{ fontSize: "0.8rem" }}>{new Date(p.clock * 1000).toLocaleString()}</Typography>
+                              </Box>
+                              <Box>
+                                <Typography variant="caption" color="text.disabled">Duration</Typography>
+                                <Typography variant="body2" sx={{ fontSize: "0.8rem" }}>{formatAge(p.age_seconds)}</Typography>
+                              </Box>
+                              {p.acknowledged && (
+                                <Box>
+                                  <Typography variant="caption" color="text.disabled">Acknowledged by</Typography>
+                                  <Typography variant="body2" sx={{ fontSize: "0.8rem", fontWeight: 600, color: "success.main" }}>
+                                    {p.ack_user || "Unknown"}
+                                    {p.ack_time && (
+                                      <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 0.75, fontWeight: 400 }}>
+                                        · {new Date(p.ack_time).toLocaleString()}
+                                      </Typography>
+                                    )}
+                                  </Typography>
+                                </Box>
                               )}
                             </Box>
-                          ) : "Acknowledged"
-                        }
-                      >
-                        <Chip
-                          label={p.ack_user ? `Ack'd by ${p.ack_user}` : "Ack'd"}
-                          size="small"
-                          color="success"
-                          variant="outlined"
-                          sx={{ height: 20, fontSize: "0.68rem" }}
-                        />
-                      </Tooltip>
-                    ) : (
-                      <Tooltip title="Acknowledge this problem">
-                        <span>
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            onClick={() => { setAckTarget(p); setAckNote(""); }}
-                            disabled={acknowledging.has(p.eventid)}
-                            sx={{ fontSize: "0.68rem", height: 20, minWidth: 50, px: 1 }}
-                          >
-                            {acknowledging.has(p.eventid) ? "…" : "Ack"}
-                          </Button>
-                        </span>
-                      </Tooltip>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))
+                            {p.ack_note && (
+                              <Box sx={{ mt: 1, px: 1.5, py: 0.75, bgcolor: "background.paper", borderRadius: 1, borderLeft: "3px solid", borderColor: "success.main" }}>
+                                <Typography variant="caption" color="text.disabled">Note</Typography>
+                                <Typography variant="body2" sx={{ fontSize: "0.82rem", fontStyle: "italic", mt: 0.25 }}>
+                                  "{p.ack_note}"
+                                </Typography>
+                              </Box>
+                            )}
+                            {p.acknowledged && !p.ack_note && (
+                              <Typography variant="caption" color="text.disabled" sx={{ display: "block", mt: 0.75 }}>No note was added.</Typography>
+                            )}
+                          </Box>
+                        </Collapse>
+                      </TableCell>
+                    </TableRow>
+                  </>
+                );
+              })
             )}
           </TableBody>
         </Table>
@@ -1418,7 +1521,7 @@ const ProblemsTab = () => {
   );
 };
 
-// ── Item History tab (widget grid) ────────────────────────────────────
+// ── Item Graphs tab (widget grid) ────────────────────────────────────
 
 const ItemHistoryTab = () => {
   const [widgets, setWidgets] = useState<MetricWidgetConfig[]>([]);
@@ -1438,7 +1541,7 @@ const ItemHistoryTab = () => {
         .catch(() => {});
     };
     fetchEvents();
-    const timer = setInterval(fetchEvents, 30_000);
+    const timer = setInterval(fetchEvents, 10_000);
     return () => clearInterval(timer);
   }, []);
 
@@ -1552,7 +1655,7 @@ const ItemHistoryTab = () => {
       {/* Toolbar */}
       <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 700, fontSize: "0.85rem" }}>
-          Item History
+          Item Graphs
         </Typography>
         {widgets.length > 0 && (
           <Chip
@@ -1775,6 +1878,8 @@ const AlertRulesTab = () => {
   const [severity, setSeverity] = useState(2);
   const [addSound, setAddSound] = useState("default");
   const [creating, setCreating] = useState(false);
+  const [toast, setToast] = useState<{ open: boolean; message: string; severity: "success" | "error" }>({ open: false, message: "", severity: "error" });
+  const showToast = (message: string, sev: "success" | "error") => setToast({ open: true, message, severity: sev });
 
   const [customSounds, setCustomSounds] = useState<CustomSound[]>([]);
   useEffect(() => { listSounds().then(setCustomSounds).catch(() => {}); }, []);
@@ -1964,6 +2069,8 @@ const AlertRulesTab = () => {
       }
       setAddOpen(false);
       loadRules();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed to create alert rule.", "error");
     } finally {
       setCreating(false);
     }
@@ -1985,23 +2092,33 @@ const AlertRulesTab = () => {
       setRuleSoundsState(getRuleSounds());
       setEditRule(null);
       loadRules();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed to save alert rule.", "error");
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = async (id: number) => {
-    await api.deleteAlertRule(id);
-    const updated = getRuleSounds();
-    delete updated[id];
-    localStorage.setItem("alertRuleSounds", JSON.stringify(updated));
-    setRuleSoundsState({ ...updated });
-    loadRules();
+    try {
+      await api.deleteAlertRule(id);
+      const updated = getRuleSounds();
+      delete updated[id];
+      localStorage.setItem("alertRuleSounds", JSON.stringify(updated));
+      setRuleSoundsState({ ...updated });
+      loadRules();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed to delete alert rule.", "error");
+    }
   };
 
   const handleToggle = async (id: number) => {
-    await api.toggleAlertRule(id);
-    loadRules();
+    try {
+      await api.toggleAlertRule(id);
+      loadRules();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed to toggle alert rule.", "error");
+    }
   };
 
   return (
@@ -2229,7 +2346,7 @@ const AlertRulesTab = () => {
             {/* Host */}
             <FormControl size="small" fullWidth>
               <InputLabel>Host</InputLabel>
-              <Select
+              <SearchableSelect
                 label="Host"
                 value={selectedHost}
                 onChange={(e) => setSelectedHost(e.target.value)}
@@ -2239,7 +2356,7 @@ const AlertRulesTab = () => {
                     {h.host}
                   </MenuItem>
                 ))}
-              </Select>
+              </SearchableSelect>
             </FormControl>
 
             {/* Operator + threshold */}
@@ -2456,7 +2573,7 @@ const AlertRulesTab = () => {
             {/* Host */}
             <FormControl size="small" fullWidth>
               <InputLabel>Host</InputLabel>
-              <Select
+              <SearchableSelect
                 label="Host"
                 value={editHost}
                 onChange={(e) => {
@@ -2468,12 +2585,12 @@ const AlertRulesTab = () => {
                 {hosts.map((h) => (
                   <MenuItem key={h.hostid} value={h.host}>{h.host}</MenuItem>
                 ))}
-              </Select>
+              </SearchableSelect>
             </FormControl>
             {/* Item */}
             <FormControl size="small" fullWidth disabled={!editHost || editItemsLoading}>
               <InputLabel>{editItemsLoading ? "Loading…" : "Item"}</InputLabel>
-              <Select
+              <SearchableSelect
                 label={editItemsLoading ? "Loading…" : "Item"}
                 value={editItemId}
                 onChange={(e) => {
@@ -2489,7 +2606,7 @@ const AlertRulesTab = () => {
                     </Box>
                   </MenuItem>
                 ))}
-              </Select>
+              </SearchableSelect>
             </FormControl>
             <Box sx={{ display: "flex", gap: 1.5 }}>
               <FormControl size="small" sx={{ width: 110 }}>
@@ -2595,170 +2712,114 @@ const AlertRulesTab = () => {
           }}>Delete</Button>
         </DialogActions>
       </Dialog>
+
+      <Snackbar open={toast.open} autoHideDuration={4000} onClose={() => setToast((t) => ({ ...t, open: false }))} anchorOrigin={{ vertical: "bottom", horizontal: "center" }}>
+        <Alert onClose={() => setToast((t) => ({ ...t, open: false }))} severity={toast.severity} variant="filled" sx={{ width: "100%" }}>{toast.message}</Alert>
+      </Snackbar>
     </Box>
   );
 };
 
 // ── Notifications tab ─────────────────────────────────────────────────
 
-const NotificationsTab = () => {
-  const [events, setEvents] = useState<AlertEvent[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [fetchError, setFetchError] = useState(false);
-  const [selectedSeverities, setSelectedSeverities] = useState<number[]>([]);
-  const [hostFilter, setHostFilter] = useState("");
+type ZabbixNotification = {
+  alertid: string;
+  clock: number;
+  sendto: string;
+  subject: string;
+  status: number;
+  status_label: string;
+  error: string;
+  username: string;
+  media_type: string;
+};
 
-  const loadEvents = useCallback(() => {
+const NotificationsTab = () => {
+  const [notifs, setNotifs] = useState<ZabbixNotification[]>([]);
+  const [portalEvents, setPortalEvents] = useState<AlertEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState("");
+  const [hours, setHours] = useState(24);
+  const [statusFilter, setStatusFilter] = useState<number | "">("");
+
+  const loadAll = useCallback(() => {
     setLoading(true);
-    api
-      .getAlertEvents(500)
-      .then((r) => { setFetchError(false); setEvents(r.events); })
-      .catch(() => setFetchError(true))
+    setFetchError("");
+    Promise.all([
+      api.getNotificationHistory({ hours, limit: 500 }),
+      api.getAlertEvents(500),
+    ])
+      .then(([nr, ar]) => {
+        setNotifs(nr.notifications);
+        setPortalEvents(ar.events);
+      })
+      .catch((e) => setFetchError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
-  }, []);
+  }, [hours]);
 
   useEffect(() => {
-    loadEvents();
-    const timer = setInterval(loadEvents, 30_000);
-    return () => clearInterval(timer);
-  }, [loadEvents]);
+    loadAll();
+    const t = setInterval(loadAll, 10_000);
+    return () => clearInterval(t);
+  }, [loadAll]);
 
-  const toggleSeverity = (sev: number) => {
-    setSelectedSeverities((prev) =>
-      prev.includes(sev) ? prev.filter((s) => s !== sev) : [...prev, sev],
-    );
-  };
+  const filtered = statusFilter === "" ? notifs : notifs.filter((n) => n.status === statusFilter);
 
-  const uniqueHosts = Array.from(new Set(events.map((e) => e.hostname))).sort();
+  const sentCount = notifs.filter((n) => n.status === 1).length;
+  const failedCount = notifs.filter((n) => n.status === 2).length;
+  const pendingCount = notifs.filter((n) => n.status === 0).length;
 
-  const filtered = events.filter((e) => {
-    if (selectedSeverities.length > 0 && !selectedSeverities.includes(e.severity)) return false;
-    if (hostFilter && e.hostname !== hostFilter) return false;
-    return true;
-  });
-
-  const severityCounts = SEVERITY_CONFIG.map((s) => ({
-    ...s,
-    count: events.filter((e) => e.severity === s.severity).length,
-  }));
+  const statusColor = (s: number) => s === 1 ? "success" : s === 2 ? "error" : "default";
 
   return (
     <Box>
       {fetchError && (
-        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setFetchError(false)}>
-          Failed to load alert events. Check your connection and try again.
-        </Alert>
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setFetchError("")}>{fetchError}</Alert>
       )}
-      {/* Header row */}
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 2, flexWrap: "wrap" }}>
+
+      {/* Header */}
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 1.5, flexWrap: "wrap" }}>
         <NotificationsActiveOutlinedIcon sx={{ fontSize: 18, color: "text.secondary" }} />
-        <Typography variant="subtitle2" sx={{ fontWeight: 700, fontSize: "0.85rem" }}>
-          Alert Notifications
-        </Typography>
-        {!loading && (
-          <Chip
-            label={
-              filtered.length !== events.length
-                ? `${filtered.length} / ${events.length}`
-                : events.length
-            }
-            size="small"
-            sx={{ height: 18, fontSize: "0.68rem" }}
-          />
-        )}
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, fontSize: "0.85rem" }}>Zabbix Notification Deliveries</Typography>
+        {!loading && <Chip label={`${notifs.length} total`} size="small" sx={{ height: 18, fontSize: "0.68rem" }} />}
+        {!loading && sentCount > 0 && <Chip label={`${sentCount} sent`} size="small" color="success" sx={{ height: 18, fontSize: "0.68rem" }} />}
+        {!loading && failedCount > 0 && <Chip label={`${failedCount} failed`} size="small" color="error" sx={{ height: 18, fontSize: "0.68rem" }} />}
+        {!loading && pendingCount > 0 && <Chip label={`${pendingCount} pending`} size="small" color="warning" sx={{ height: 18, fontSize: "0.68rem" }} />}
         <Box sx={{ flex: 1 }} />
-        <FormControl size="small" sx={{ minWidth: 180 }}>
-          <InputLabel sx={{ fontSize: "0.78rem" }}>Filter by host</InputLabel>
-          <Select
-            label="Filter by host"
-            value={hostFilter}
-            onChange={(e) => setHostFilter(e.target.value)}
-            sx={{ fontSize: "0.78rem" }}
-          >
-            <MenuItem value="" sx={{ fontSize: "0.78rem" }}>
-              All hosts
-            </MenuItem>
-            {uniqueHosts.map((h) => (
-              <MenuItem key={h} value={h} sx={{ fontSize: "0.78rem" }}>
-                {h}
-              </MenuItem>
-            ))}
+        <FormControl size="small" sx={{ minWidth: 110 }}>
+          <InputLabel sx={{ fontSize: "0.78rem" }}>Period</InputLabel>
+          <Select label="Period" value={hours} onChange={(e) => setHours(Number(e.target.value))} sx={{ fontSize: "0.78rem" }}>
+            <MenuItem value={1}>Last 1h</MenuItem>
+            <MenuItem value={6}>Last 6h</MenuItem>
+            <MenuItem value={24}>Last 24h</MenuItem>
+            <MenuItem value={168}>Last 7d</MenuItem>
+          </Select>
+        </FormControl>
+        <FormControl size="small" sx={{ minWidth: 120 }}>
+          <InputLabel sx={{ fontSize: "0.78rem" }}>Status</InputLabel>
+          <Select label="Status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as number | "")} sx={{ fontSize: "0.78rem" }}>
+            <MenuItem value="">All</MenuItem>
+            <MenuItem value={1}>Sent</MenuItem>
+            <MenuItem value={2}>Failed</MenuItem>
+            <MenuItem value={0}>Not sent</MenuItem>
           </Select>
         </FormControl>
         <Tooltip title="Refresh">
-          <IconButton size="small" onClick={loadEvents} disabled={loading}>
-            <RefreshIcon sx={{ fontSize: 18 }} />
-          </IconButton>
+          <IconButton size="small" onClick={loadAll} disabled={loading}><RefreshIcon sx={{ fontSize: 18 }} /></IconButton>
         </Tooltip>
       </Box>
 
-      {/* Severity filter chips */}
-      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, mb: 2 }}>
-        {loading
-          ? SEVERITY_CONFIG.map((s) => (
-              <Skeleton key={s.severity} variant="rounded" width={90} height={26} />
-            ))
-          : severityCounts
-              .filter((s) => s.count > 0)
-              .map((s) => {
-                const active = selectedSeverities.includes(s.severity);
-                return (
-                  <Chip
-                    key={s.severity}
-                    label={`${s.label} (${s.count})`}
-                    size="small"
-                    onClick={() => toggleSeverity(s.severity)}
-                    sx={{
-                      fontWeight: 700,
-                      fontSize: "0.72rem",
-                      cursor: "pointer",
-                      color: active ? s.color : "text.secondary",
-                      backgroundColor: active ? s.bg : "transparent",
-                      border: `1px solid ${active ? `${s.color}80` : "rgba(255,255,255,0.1)"}`,
-                      transition: "all 0.15s",
-                    }}
-                  />
-                );
-              })}
-        {!loading && events.length === 0 && (
-          <Chip
-            label="No notifications yet"
-            size="small"
-            color="success"
-            variant="outlined"
-            sx={{ fontSize: "0.72rem" }}
-          />
-        )}
-        {!loading && selectedSeverities.length > 0 && (
-          <Chip
-            label="Clear filters"
-            size="small"
-            variant="outlined"
-            onDelete={() => setSelectedSeverities([])}
-            sx={{ fontSize: "0.72rem" }}
-          />
-        )}
-      </Box>
-
-      {/* Notifications table */}
-      <TableContainer component={Paper} variant="outlined">
+      {/* Zabbix delivery table */}
+      <TableContainer component={Paper} variant="outlined" sx={{ mb: 3 }}>
         <Table size="small">
           <TableHead>
             <TableRow>
-              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 130 }}>
-                Severity
-              </TableCell>
-              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 160 }}>Host</TableCell>
-              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem" }}>Item</TableCell>
-              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 110 }}>
-                Condition
-              </TableCell>
-              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 100 }}>
-                Value
-              </TableCell>
-              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 100 }}>
-                Fired
-              </TableCell>
+              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 130 }}>Time</TableCell>
+              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem" }}>Subject</TableCell>
+              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 160 }}>Sent to</TableCell>
+              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 120 }}>User</TableCell>
+              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 120 }}>Media type</TableCell>
+              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 90 }}>Status</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -2768,75 +2829,89 @@ const NotificationsTab = () => {
                 <TableRow key={i}>
                   {Array.from({ length: 6 }).map((__, j) => (
                     // biome-ignore lint/suspicious/noArrayIndexKey: skeleton cells
-                    <TableCell key={j}>
-                      <Skeleton variant="text" height={20} />
-                    </TableCell>
+                    <TableCell key={j}><Skeleton variant="text" height={20} /></TableCell>
                   ))}
                 </TableRow>
               ))
             ) : filtered.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={6} align="center" sx={{ py: 4, color: "text.secondary" }}>
-                  {events.length === 0
-                    ? "No alert notifications yet"
-                    : "No notifications match filters"}
+                  {notifs.length === 0 ? "No notification deliveries in this period" : "No notifications match filters"}
                 </TableCell>
               </TableRow>
             ) : (
-              filtered.map((e) => {
-                const sev = SEVERITY_CONFIG.find((s) => s.severity === e.severity) ??
-                  SEVERITY_CONFIG[5];
-                const ageSeconds = Math.floor(Date.now() / 1000) - e.fired_at;
+              filtered.map((n) => (
+                <TableRow key={n.alertid} hover>
+                  <TableCell>
+                    <Tooltip title={new Date(n.clock * 1000).toLocaleString()}>
+                      <Typography variant="body2" sx={{ fontSize: "0.75rem", color: "text.secondary", cursor: "default" }}>
+                        {formatAge(Math.floor(Date.now() / 1000) - n.clock)} ago
+                      </Typography>
+                    </Tooltip>
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2" sx={{ fontSize: "0.8rem" }}>{n.subject || "—"}</Typography>
+                    {n.error && <Typography variant="caption" color="error.main" sx={{ display: "block" }}>{n.error}</Typography>}
+                  </TableCell>
+                  <TableCell sx={{ maxWidth: 200 }}><Tooltip title={n.sendto || ""} placement="top"><Typography variant="body2" sx={{ fontSize: "0.78rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{n.sendto || "—"}</Typography></Tooltip></TableCell>
+                  <TableCell><Typography variant="body2" sx={{ fontSize: "0.78rem" }}>{n.username || "—"}</Typography></TableCell>
+                  <TableCell><Typography variant="body2" sx={{ fontSize: "0.78rem" }}>{n.media_type || "—"}</Typography></TableCell>
+                  <TableCell><Chip label={n.status_label} size="small" color={statusColor(n.status)} sx={{ fontSize: "0.68rem", height: 18 }} /></TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </TableContainer>
+
+      {/* Portal alert events section */}
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 1.5 }}>
+        <WarningAmberOutlinedIcon sx={{ fontSize: 16, color: "text.secondary" }} />
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, fontSize: "0.85rem" }}>Portal Alert Events</Typography>
+        {!loading && <Chip label={portalEvents.length} size="small" sx={{ height: 18, fontSize: "0.68rem" }} />}
+        <Typography variant="caption" color="text.secondary">Custom threshold rules defined in Alert Rules</Typography>
+      </Box>
+      <TableContainer component={Paper} variant="outlined">
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 100 }}>Severity</TableCell>
+              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 150 }}>Host</TableCell>
+              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem" }}>Item</TableCell>
+              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 120 }}>Condition</TableCell>
+              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 90 }}>Value</TableCell>
+              <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", width: 100 }}>Fired</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {loading ? (
+              Array.from({ length: 3 }).map((_, i) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: skeleton rows
+                <TableRow key={i}>
+                  {Array.from({ length: 6 }).map((__, j) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: skeleton cells
+                    <TableCell key={j}><Skeleton variant="text" height={20} /></TableCell>
+                  ))}
+                </TableRow>
+              ))
+            ) : portalEvents.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={6} align="center" sx={{ py: 3, color: "text.secondary" }}>No portal alert events</TableCell>
+              </TableRow>
+            ) : (
+              portalEvents.map((e) => {
+                const sev = SEVERITY_CONFIG.find((s) => s.severity === e.severity) ?? SEVERITY_CONFIG[5];
                 return (
-                  <TableRow
-                    key={e.id}
-                    sx={{ "&:hover": { backgroundColor: "action.hover" } }}
-                  >
+                  <TableRow key={e.id} sx={{ "&:hover": { backgroundColor: "action.hover" } }}>
+                    <TableCell><SeverityChip severity={e.severity} /></TableCell>
+                    <TableCell><Typography variant="body2" sx={{ fontSize: "0.8rem", fontWeight: 500 }}>{e.hostname}</Typography></TableCell>
+                    <TableCell><Typography variant="body2" sx={{ fontSize: "0.8rem" }}>{e.item_name}</Typography></TableCell>
+                    <TableCell><Typography variant="body2" sx={{ fontSize: "0.8rem", fontFamily: "monospace" }}>{e.operator} {e.threshold}</Typography></TableCell>
+                    <TableCell><Typography variant="body2" sx={{ fontSize: "0.8rem", fontWeight: 600, color: sev.color }}>{e.actual_value}</Typography></TableCell>
                     <TableCell>
-                      <SeverityChip severity={e.severity} />
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="body2" sx={{ fontSize: "0.8rem", fontWeight: 500 }}>
-                        {e.hostname}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="body2" sx={{ fontSize: "0.8rem" }}>
-                        {e.item_name}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Typography
-                        variant="body2"
-                        sx={{ fontSize: "0.8rem", fontFamily: "monospace" }}
-                      >
-                        {e.operator} {e.threshold}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Typography
-                        variant="body2"
-                        sx={{ fontSize: "0.8rem", fontWeight: 600, color: sev.color }}
-                      >
-                        {e.actual_value}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Tooltip
-                        title={new Date(e.fired_at * 1000).toLocaleString("en-US", {
-                          month: "short",
-                          day: "numeric",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                          second: "2-digit",
-                          hour12: false,
-                        })}
-                      >
-                        <Typography
-                          variant="body2"
-                          sx={{ fontSize: "0.75rem", color: "text.secondary", cursor: "default" }}
-                        >
-                          {formatAge(ageSeconds)} ago
+                      <Tooltip title={new Date(e.fired_at * 1000).toLocaleString()}>
+                        <Typography variant="body2" sx={{ fontSize: "0.75rem", color: "text.secondary", cursor: "default" }}>
+                          {formatAge(Math.floor(Date.now() / 1000) - e.fired_at)} ago
                         </Typography>
                       </Tooltip>
                     </TableCell>
@@ -2957,9 +3032,9 @@ const ProblemHistoryTab = () => {
           >
             <MenuItem value={0}>All</MenuItem>
             <MenuItem value={2}>Low+</MenuItem>
-            <MenuItem value={3}>Average+</MenuItem>
+            <MenuItem value={3}>Medium+</MenuItem>
             <MenuItem value={4}>High+</MenuItem>
-            <MenuItem value={5}>Disaster only</MenuItem>
+            <MenuItem value={5}>Critical only</MenuItem>
           </Select>
         </FormControl>
         <TextField
@@ -3079,10 +3154,334 @@ const ProblemHistoryTab = () => {
   );
 };
 
+// ── Latest Data tab ───────────────────────────────────────────────────
+
+type LatestItem = {
+  itemid: string;
+  name: string;
+  key_: string;
+  value_type: string;
+  delay: string;
+  status: string;
+  hostname: string;
+  tags: Array<{ tag: string; value: string }>;
+  lastvalue: string;
+  lastclock: number | null;
+  templateid: string;
+};
+
+const VALUE_TYPE_LABELS: Record<string, string> = {
+  "0": "Float", "1": "String", "2": "Log", "3": "Integer", "4": "Text",
+};
+
+const parseDelaySecs = (delay: string): number => {
+  if (!delay || delay === "0") return 0;
+  const m = delay.match(/^(\d+)([smhd]?)$/i);
+  if (!m) return 0;
+  const n = parseInt(m[1], 10);
+  const unit = (m[2] || "s").toLowerCase();
+  if (unit === "m") return n * 60;
+  if (unit === "h") return n * 3600;
+  if (unit === "d") return n * 86400;
+  return n;
+};
+
+const isLatestItemStale = (item: LatestItem): boolean => {
+  const delaySecs = parseDelaySecs(item.delay);
+  if (delaySecs === 0) return false;
+  if (!item.lastclock) return true;
+  return Math.floor(Date.now() / 1000) - item.lastclock > delaySecs * 3;
+};
+
+const formatLastCheck = (clock: number | null): string => {
+  if (!clock) return "—";
+  const diff = Math.floor(Date.now() / 1000) - clock;
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+};
+
+const LatestDataTab = () => {
+  const [hosts, setHosts] = useState<Host[]>([]);
+  const [hostsLoading, setHostsLoading] = useState(true);
+  const [selectedHost, setSelectedHost] = useState("");
+  const [items, setItems] = useState<LatestItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "enabled" | "disabled">("enabled");
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchHosts = () =>
+      api.listHosts()
+        .then((r) => { if (!cancelled) setHosts(r.hosts); })
+        .catch(() => {})
+        .finally(() => { if (!cancelled) setHostsLoading(false); });
+    void fetchHosts();
+    const t = window.setInterval(fetchHosts, 10_000);
+    return () => { cancelled = true; window.clearInterval(t); };
+  }, []);
+
+  const loadItems = useCallback(async (host: string) => {
+    if (!host) return;
+    setLoading(true);
+    try {
+      const res = await api.listAllItems({ hostname: host, limit: 5000 });
+      setItems(res.items);
+      setLastRefreshed(new Date());
+    } catch {
+      setItems([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedHost) void loadItems(selectedHost);
+    else setItems([]);
+  }, [selectedHost, loadItems]);
+
+  useEffect(() => {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    if (autoRefresh && selectedHost) {
+      intervalRef.current = setInterval(() => void loadItems(selectedHost), 10000);
+    }
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, [autoRefresh, selectedHost, loadItems]);
+
+  const filtered = items.filter((item) => {
+    const q = search.toLowerCase();
+    const matchSearch = !q || item.name.toLowerCase().includes(q) || item.key_.toLowerCase().includes(q) || item.lastvalue.toLowerCase().includes(q);
+    const matchStatus = statusFilter === "all" || (statusFilter === "enabled" ? item.status === "0" : item.status !== "0");
+    return matchSearch && matchStatus;
+  });
+
+  const enabledCount = items.filter((i) => i.status === "0").length;
+
+  return (
+    <Stack spacing={2}>
+      {/* ── Controls ── */}
+      <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems="center">
+        <FormControl size="small" sx={{ minWidth: 240 }}>
+          <InputLabel>Host</InputLabel>
+          <SearchableSelect label="Host" value={selectedHost} onChange={(e) => setSelectedHost(e.target.value)} disabled={hostsLoading}>
+            {hosts.map((h) => <MenuItem key={h.hostid} value={h.host}>{h.host}</MenuItem>)}
+          </SearchableSelect>
+        </FormControl>
+
+        <TextField
+          size="small" placeholder="Search name, key, or value…" value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          sx={{ flex: 1, minWidth: 200 }}
+          InputProps={{
+            startAdornment: <InputAdornment position="start"><ShowChartOutlinedIcon sx={{ fontSize: 16, color: "text.disabled" }} /></InputAdornment>,
+            endAdornment: search ? <InputAdornment position="end"><IconButton size="small" onClick={() => setSearch("")}><CloseIcon sx={{ fontSize: 14 }} /></IconButton></InputAdornment> : undefined,
+          }}
+        />
+
+        <FormControl size="small" sx={{ minWidth: 130 }}>
+          <InputLabel>Status</InputLabel>
+          <Select label="Status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}>
+            <MenuItem value="all">All</MenuItem>
+            <MenuItem value="enabled">Enabled</MenuItem>
+            <MenuItem value="disabled">Disabled</MenuItem>
+          </Select>
+        </FormControl>
+
+        <Tooltip title={autoRefresh ? "Auto-refresh on (10s)" : "Auto-refresh off"}>
+          <IconButton size="small" color={autoRefresh ? "primary" : "default"} onClick={() => setAutoRefresh((v) => !v)}>
+            <RefreshIcon sx={{ fontSize: 20 }} />
+          </IconButton>
+        </Tooltip>
+
+        <Button size="small" variant="outlined" startIcon={loading ? <CircularProgress size={14} /> : <RefreshIcon />}
+          onClick={() => { if (selectedHost) void loadItems(selectedHost); }} disabled={loading || !selectedHost}>
+          Refresh
+        </Button>
+
+        {lastRefreshed && (
+          <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>
+            Updated {lastRefreshed.toLocaleTimeString()}
+          </Typography>
+        )}
+      </Stack>
+
+      {/* ── Summary chips ── */}
+      {selectedHost && !loading && items.length > 0 && (
+        <Stack direction="row" spacing={1} flexWrap="wrap">
+          <Chip label={`${items.length} total items`} size="small" variant="outlined" />
+          <Chip label={`${enabledCount} enabled`} size="small" color="success" variant="outlined" />
+          {items.length - enabledCount > 0 && (
+            <Chip label={`${items.length - enabledCount} disabled`} size="small" variant="outlined" />
+          )}
+          {filtered.length !== items.length && (
+            <Chip label={`${filtered.length} shown`} size="small" color="primary" variant="outlined" />
+          )}
+        </Stack>
+      )}
+
+      {/* ── Empty states ── */}
+      {!selectedHost && (
+        <Alert severity="info" sx={{ py: 0.5 }}>
+          Select a host above to see its monitoring items and their latest collected values.
+        </Alert>
+      )}
+
+      {/* Host unreachable banner */}
+      {selectedHost && (() => {
+        const h = hosts.find((hh) => hh.host === selectedHost);
+        if (!h?.interfaces?.length) return null;
+        const primary = h.interfaces.find((i) => i.type === "1") ?? h.interfaces[0];
+        if (primary?.available !== "2") return null;
+        return (
+          <Alert severity="warning" icon={<WifiOffIcon fontSize="inherit" />} sx={{ py: 0.5, fontSize: "0.82rem" }}>
+            <strong>Host agent unreachable.</strong> Zabbix cannot collect data from this host.
+            Items showing a <strong>No data</strong> chip have not reported within their expected
+            polling interval — values below are stale.
+          </Alert>
+        );
+      })()}
+
+      {/* ── Table ── */}
+      {selectedHost && (
+        <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 600, overflow: "auto" }}>
+          <Table size="small" stickyHeader>
+            <TableHead>
+              <TableRow>
+                <TableCell sx={{ fontWeight: 700, bgcolor: "background.paper", whiteSpace: "nowrap" }}>Name</TableCell>
+                <TableCell sx={{ fontWeight: 700, bgcolor: "background.paper", maxWidth: 220 }}>Key</TableCell>
+                <TableCell sx={{ fontWeight: 700, bgcolor: "background.paper", whiteSpace: "nowrap" }}>Type</TableCell>
+                <TableCell sx={{ fontWeight: 700, bgcolor: "background.paper", whiteSpace: "nowrap" }}>Interval</TableCell>
+                <TableCell sx={{ fontWeight: 700, bgcolor: "background.paper", whiteSpace: "nowrap" }}>Last value</TableCell>
+                <TableCell sx={{ fontWeight: 700, bgcolor: "background.paper", whiteSpace: "nowrap" }}>Last check</TableCell>
+                <TableCell sx={{ fontWeight: 700, bgcolor: "background.paper" }}>Status</TableCell>
+                <TableCell sx={{ fontWeight: 700, bgcolor: "background.paper" }}>Tags</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {loading ? (
+                Array.from({ length: 8 }).map((_, i) => (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: skeleton
+                  <TableRow key={i}>
+                    {Array.from({ length: 8 }).map((__, j) => (
+                      // biome-ignore lint/suspicious/noArrayIndexKey: skeleton
+                      <TableCell key={j}><Skeleton variant="text" /></TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : filtered.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={8} align="center" sx={{ py: 4, color: "text.secondary" }}>
+                    {items.length === 0 ? "No items found on this host." : "No items match the current filters."}
+                  </TableCell>
+                </TableRow>
+              ) : (
+                filtered.map((item) => {
+                  const isEnabled = item.status === "0";
+                  const hasValue = !!item.lastvalue;
+                  const isStale = isLatestItemStale(item);
+                  return (
+                    <TableRow key={item.itemid} hover sx={{ opacity: isEnabled ? 1 : 0.55 }}>
+                      <TableCell>
+                        <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+                          <Typography variant="body2" sx={{ fontWeight: 500 }}>{item.name}</Typography>
+                          {item.templateid === "0" && (
+                            <Chip label="custom" size="small" color="primary" variant="outlined"
+                              sx={{ height: 14, fontSize: "0.55rem", fontWeight: 700, px: 0.25 }} />
+                          )}
+                        </Box>
+                      </TableCell>
+                      <TableCell sx={{ maxWidth: 220 }}>
+                        <Tooltip title={item.key_} placement="top">
+                          <Typography variant="body2" sx={{ fontFamily: "monospace", fontSize: "0.72rem", color: "text.secondary", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {item.key_}
+                          </Typography>
+                        </Tooltip>
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2" sx={{ whiteSpace: "nowrap", color: "text.secondary", fontSize: "0.75rem" }}>
+                          {VALUE_TYPE_LABELS[item.value_type] ?? item.value_type}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2" sx={{ whiteSpace: "nowrap", color: "text.secondary", fontSize: "0.75rem" }}>
+                          {item.delay || "—"}
+                        </Typography>
+                      </TableCell>
+                      <TableCell sx={{ maxWidth: 260 }}>
+                        <Tooltip title={hasValue && !isStale ? item.lastvalue : isStale ? "Value is stale — host may be unreachable" : "No data collected yet"} placement="top">
+                          <Typography variant="body2" sx={{
+                            fontFamily: "monospace", fontSize: "0.8rem",
+                            color: isStale ? "text.disabled" : hasValue ? "text.primary" : "text.disabled",
+                            whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 240,
+                          }}>
+                            {isStale ? "—" : (item.lastvalue || "—")}
+                          </Typography>
+                        </Tooltip>
+                      </TableCell>
+                      <TableCell sx={{ whiteSpace: "nowrap" }}>
+                        <Tooltip title={item.lastclock ? new Date(item.lastclock * 1000).toLocaleString() : "Never collected"} placement="top">
+                          <Typography variant="body2" sx={{ fontSize: "0.75rem", color: isStale ? "warning.main" : "text.secondary" }}>
+                            {formatLastCheck(item.lastclock)}
+                          </Typography>
+                        </Tooltip>
+                      </TableCell>
+                      <TableCell>
+                        {isStale ? (
+                          <Chip label="No data" size="small" color="error" variant="outlined"
+                            sx={{ height: 18, fontSize: "0.65rem" }} />
+                        ) : (
+                        <Chip
+                          label={isEnabled ? "Enabled" : "Disabled"}
+                          size="small" variant="outlined"
+                          color={isEnabled ? "success" : "default"}
+                          sx={{ height: 18, fontSize: "0.65rem" }}
+                        />
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.4 }}>
+                          {(item.tags ?? []).map((t: { tag: string; value: string }) => (
+                            <Chip key={`${t.tag}:${t.value}`} label={t.value ? `${t.tag}: ${t.value}` : t.tag}
+                              size="small" variant="outlined" sx={{ height: 16, fontSize: "0.6rem" }} />
+                          ))}
+                        </Box>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+    </Stack>
+  );
+};
+
 // ── Main export ───────────────────────────────────────────────────────
 
-export const Metrics = () => {
-  const [tab, setTab] = useState(0);
+const TAB_SLUGS = ["problems", "notifications", "item-graphs", "alert-rules", "history", "latest-data"];
+
+const MetricsInner = () => {
+  const searchParams = useSearchParams();
+  const [tab, setTab] = useState(() => { const i = TAB_SLUGS.indexOf(searchParams.get("tab") ?? ""); return i >= 0 ? i : 0; });
+
+  useEffect(() => { const i = TAB_SLUGS.indexOf(searchParams.get("tab") ?? ""); setTab(i >= 0 ? i : 0); }, [searchParams]);
+
+  const PAGE_META = [
+    { title: "Metrics",          subtitle: "Active problems and alert notifications" },
+    { title: "Notifications",    subtitle: "Zabbix notification delivery history" },
+    { title: "Item Graphs",      subtitle: "Item history charts and time-series graphs" },
+    { title: "Alerts",           subtitle: "Custom threshold alert rules and fired events" },
+    { title: "Problem History",  subtitle: "Search and filter past Zabbix problem events" },
+    { title: "Latest Data",      subtitle: "See the most recent collected value for every item on a host" },
+  ];
+  const meta = PAGE_META[tab] ?? PAGE_META[0];
 
   return (
     <Box>
@@ -3090,43 +3489,26 @@ export const Metrics = () => {
         <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 0.5 }}>
           <ShowChartOutlinedIcon sx={{ fontSize: 28, color: "primary.main" }} />
           <Typography variant="h4" sx={{ fontWeight: 700, letterSpacing: -0.5 }}>
-            Metrics
+            {meta.title}
           </Typography>
         </Box>
         <Typography color="text.secondary" sx={{ fontSize: "0.875rem" }}>
-          Active problems, alert notifications, item history charts, custom alert rules, and problem history search
+          {meta.subtitle}
         </Typography>
       </Box>
-
-      <Tabs
-        value={tab}
-        onChange={(_, v) => setTab(v)}
-        sx={{ mb: 3, borderBottom: 1, borderColor: "divider" }}
-      >
-        <Tab label="Problems" sx={{ fontSize: "0.82rem", textTransform: "none", minHeight: 40 }} />
-        <Tab
-          label="Notifications"
-          sx={{ fontSize: "0.82rem", textTransform: "none", minHeight: 40 }}
-        />
-        <Tab
-          label="Item History"
-          sx={{ fontSize: "0.82rem", textTransform: "none", minHeight: 40 }}
-        />
-        <Tab
-          label="Alert Rules"
-          sx={{ fontSize: "0.82rem", textTransform: "none", minHeight: 40 }}
-        />
-        <Tab
-          label="History"
-          sx={{ fontSize: "0.82rem", textTransform: "none", minHeight: 40 }}
-        />
-      </Tabs>
 
       {tab === 0 && <ProblemsTab />}
       {tab === 1 && <NotificationsTab />}
       {tab === 2 && <ItemHistoryTab />}
       {tab === 3 && <AlertRulesTab />}
       {tab === 4 && <ProblemHistoryTab />}
+      {tab === 5 && <LatestDataTab />}
     </Box>
   );
 };
+
+export const Metrics = () => (
+  <Suspense fallback={null}>
+    <MetricsInner />
+  </Suspense>
+);

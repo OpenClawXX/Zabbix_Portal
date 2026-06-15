@@ -38,9 +38,12 @@ export const AuthProvider = ({ children }: PropsWithChildren) => {
   }, []);
 
   const logout = useCallback(() => {
-    clearToken();
-    setUser(null);
-    window.location.href = "/login";
+    // Clear HttpOnly cookie server-side, then clear any legacy client-side cookie.
+    void fetch("/api/auth/logout", { method: "POST" }).finally(() => {
+      clearToken();
+      setUser(null);
+      window.location.href = "/login";
+    });
   }, []);
 
   return (

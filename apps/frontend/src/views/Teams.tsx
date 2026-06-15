@@ -33,6 +33,7 @@ import {
 } from "@mui/material";
 import { useCallback, useEffect, useState } from "react";
 import { type Host, type Team, type TeamUser, api } from "../app/api";
+import { SearchableSelect } from "../components/SearchableSelect";
 import { useAuth } from "../app/context/AuthContext";
 import { useSync } from "../app/context/SyncContext";
 
@@ -559,7 +560,7 @@ export const Teams = () => {
         <DialogContent sx={{ pt: "16px !important" }}>
           <FormControl fullWidth>
             <InputLabel>Server</InputLabel>
-            <Select
+            <SearchableSelect
               value={selectedHost}
               label="Server"
               onChange={(e: SelectChangeEvent) => setSelectedHost(e.target.value)}
@@ -575,7 +576,7 @@ export const Teams = () => {
                   </MenuItem>
                 ))
               )}
-            </Select>
+            </SearchableSelect>
           </FormControl>
         </DialogContent>
         <DialogActions>

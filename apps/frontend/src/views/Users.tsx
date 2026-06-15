@@ -110,18 +110,7 @@ const isInherited = (role: string, selected: string[]): boolean => {
   return (ROLE_HIERARCHY as readonly string[]).slice(idx + 1).some((r) => selected.includes(r));
 };
 
-const ROLE_LEVELS: Record<string, number> = { member: 1, operator: 2, team_lead: 3, root: 4 };
 
-const grantableRoles = (callerRoles: string[]): Set<string> => {
-  if (callerRoles.includes("root"))
-    return new Set(["member", "operator", "team_lead", "auditor", "root"]);
-  const max = Math.max(0, ...callerRoles.map((r) => ROLE_LEVELS[r] ?? 0));
-  return new Set(
-    Object.entries(ROLE_LEVELS)
-      .filter(([, level]) => level <= max)
-      .map(([role]) => role),
-  );
-};
 
 const roleColor = (r: string): "error" | "primary" | "secondary" | "warning" | "default" =>
   r === "root"
@@ -276,7 +265,7 @@ export const Users = () => {
     return matchSearch && matchTeam && matchRole;
   });
 
-  const callerGrantable = grantableRoles(currentUser?.roles ?? []);
+
 
   const RolePicker = ({
     selected,
@@ -286,7 +275,7 @@ export const Users = () => {
     onChange: React.Dispatch<React.SetStateAction<string[]>>;
   }) => (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 0.75 }}>
-      {ROLE_OPTIONS.filter((r) => callerGrantable.has(r.value)).map((r) => {
+      {ROLE_OPTIONS.map((r) => {
         const checked = selected.includes(r.value);
         const inherited = isInherited(r.value, selected);
         return (

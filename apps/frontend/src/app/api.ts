@@ -138,6 +138,7 @@ export type ItemHistory = {
   history: HistoryPoint[];
   item_name: string;
   units: string;
+  hostname: string;
 };
 
 export type ApiHealth = {
@@ -162,6 +163,7 @@ export type Host = {
   interfaces?: HostInterface[];
   tags?: HostTag[];
   problem_count?: number;
+  proxyid?: string;
 };
 
 export type TeamUser = {
@@ -246,7 +248,7 @@ export const api = {
   listHosts: () => apiFetch<{ count: number; hosts: Host[] }>("/hosts"),
   listTemplates: () =>
     apiFetch<{ templates: Array<{ templateid: string; name: string }> }>("/templates"),
-  createHost: (payload: { hostname: string; ip: string; template?: string }) =>
+  createHost: (payload: { hostname: string; ip: string; template?: string; proxyid?: string; group_ids?: string[] }) =>
     apiFetch<{ message: string; hostid: string }>("/hosts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -280,12 +282,44 @@ export const api = {
     item_name: string;
     item_key: string;
     value_type?: number;
+    delay?: string;
+    units?: string;
+    history?: string;
+    trends?: string;
+    description?: string;
+    status?: number;
+    timeout?: string;
   }) =>
     apiFetch<{ message: string; itemid: string }>("/items", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     }),
+  listAllItems: (params?: { search?: string; hostname?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.search) q.set("search", params.search);
+    if (params?.hostname) q.set("hostname", params.hostname);
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    const qs = q.toString();
+    return apiFetch<{
+      items: Array<{
+        itemid: string;
+        name: string;
+        key_: string;
+        value_type: string;
+        delay: string;
+        status: string;
+        state: string;
+        hostname: string;
+        tags: Array<{ tag: string; value: string }>;
+        lastvalue: string;
+        lastclock: number | null;
+        templateid: string;
+      }>;
+      total: number;
+    }>(`/items${qs ? `?${qs}` : ""}`);
+  },
+
   listItemKeys: () =>
     apiFetch<{
       items: Array<{
@@ -293,6 +327,11 @@ export const api = {
         name: string;
         value_type: string;
         group: string;
+        delay: string;
+        units: string;
+        history: string;
+        trends: string;
+        description: string;
       }>;
     }>("/items/keys"),
 
@@ -311,6 +350,31 @@ export const api = {
 
   deleteItem: (itemid: string) =>
     apiFetch<{ message: string }>(`/items/${itemid}`, { method: "DELETE" }),
+  updateItem: (itemid: string, payload: { name?: string; delay?: string; status?: string; key_?: string }) =>
+    apiFetch<{ ok: boolean }>(`/items/${itemid}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+
+  listAllTriggers: (params?: { search?: string; hostname?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.search) q.set("search", params.search);
+    if (params?.hostname) q.set("hostname", params.hostname);
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    const qs = q.toString();
+    return apiFetch<{
+      triggers: Array<{
+        triggerid: string;
+        description: string;
+        expression: string;
+        priority: number;
+        status: number;
+        value: number;
+        lastchange: number;
+        hostname: string;
+        templateid: string;
+        host_available: string; // "0"=Unknown "1"=Available "2"=Unavailable
+      }>;
+      total: number;
+    }>(`/triggers${qs ? `?${qs}` : ""}`);
+  },
 
   listTriggers: (hostname: string) =>
     apiFetch<{
@@ -320,19 +384,33 @@ export const api = {
         expression: string;
         priority: string;
         status: string;
+        value: number;
+        lastchange: number;
       }>;
+      host_available: string; // "0"=Unknown "1"=Available "2"=Unavailable
     }>(`/triggers/${encodeURIComponent(hostname)}`),
 
   deleteTrigger: (triggerid: string) =>
     apiFetch<{ message: string }>(`/triggers/${triggerid}`, { method: "DELETE" }),
 
+  updateTrigger: (triggerid: string, payload: { description?: string; priority?: number; status?: number; expression?: string; event_name?: string; comments?: string }) =>
+    apiFetch<{ message: string }>(`/triggers/${triggerid}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+
   addTrigger: (payload: {
     hostname: string;
     item_key: string;
     trigger_name: string;
-    threshold: number;
+    threshold?: number;
     operator?: string;
     severity?: number;
+    string_pattern?: string;
+    match_type?: string;
+    event_name?: string;
+    comments?: string;
   }) =>
     apiFetch<{ message: string; triggerid: string }>("/triggers", {
       method: "POST",
@@ -349,16 +427,33 @@ export const api = {
     status_codes?: string;
     timeout?: string;
     verify_peer?: boolean;
+    verify_host?: boolean;
     follow_redirects?: boolean;
     posts?: string;
+    post_type?: number;
+    retrieve_mode?: number;
     value_type?: number;
+    headers?: string;
+    query_fields?: Array<{ name: string; value: string }>;
+    http_proxy?: string;
     authtype?: number;
     username?: string;
     password?: string;
+    ssl_cert_file?: string;
+    ssl_key_file?: string;
+    ssl_key_password?: string;
+    convert_to_json?: boolean;
+    allow_traps?: boolean;
+    status?: number;
     regex_preprocessing?: boolean;
     regex_pattern?: string;
     regex_output?: string;
     regex_no_match_value?: string;
+    delay?: string;
+    units?: string;
+    history?: string;
+    trends?: string;
+    description?: string;
   }) =>
     apiFetch<{ message: string; itemid: string }>("/items/http", {
       method: "POST",
@@ -371,6 +466,10 @@ export const api = {
     service_type: string;
     port?: number | null;
     item_name?: string;
+    delay?: string;
+    history?: string;
+    trends?: string;
+    description?: string;
   }) =>
     apiFetch<{ message: string; itemid: string }>("/items/service", {
       method: "POST",
@@ -389,6 +488,10 @@ export const api = {
     trigger_priority?: number;
     trigger_type?: "change" | "age";
     max_age_minutes?: number;
+    delay?: string;
+    history?: string;
+    trends?: string;
+    description?: string;
   }) =>
     apiFetch<{ message: string; itemid: string; triggerid: string | null; trigger_error: string | null }>("/items/filewatch", {
       method: "POST",
@@ -404,6 +507,13 @@ export const api = {
     file_arg?: string;
     item_name?: string;
     value_type?: number;
+    delay?: string;
+    units?: string;
+    history?: string;
+    trends?: string;
+    description?: string;
+    status?: number;
+    timeout?: string;
   }) =>
     apiFetch<{ message: string; itemid: string }>("/items/script", {
       method: "POST",
@@ -420,6 +530,12 @@ export const api = {
     value_type?: number;
     username?: string;
     password?: string;
+    delay?: string;
+    units?: string;
+    history?: string;
+    trends?: string;
+    status?: number;
+    timeout?: string;
   }) =>
     apiFetch<{ message: string; itemid: string }>("/items/db/odbc", {
       method: "POST",
@@ -442,12 +558,131 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  addSnmpItem: (payload: {
+    hostname: string; item_name: string; item_key?: string; snmp_oid: string;
+    value_type?: number; snmp_version?: number; snmp_community?: string;
+    snmpv3_securityname?: string; snmpv3_securitylevel?: number;
+    snmpv3_authprotocol?: number; snmpv3_authpassphrase?: string;
+    snmpv3_privprotocol?: number; snmpv3_privpassphrase?: string;
+    snmpv3_contextname?: string;
+    delay?: string; units?: string; history?: string; trends?: string;
+    description?: string; status?: number;
+  }) => apiFetch<{ message: string; itemid: string }>("/items/snmp", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  }),
+
+  addSnmpTrapItem: (payload: {
+    hostname: string; item_name: string; item_key?: string; value_type?: number;
+    history?: string; trends?: string; description?: string; status?: number;
+  }) => apiFetch<{ message: string; itemid: string }>("/items/snmptrap", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  }),
+
+  addInternalItem: (payload: {
+    hostname: string; item_name: string; item_key: string; value_type?: number;
+    delay?: string; units?: string; history?: string; trends?: string;
+    description?: string; status?: number;
+  }) => apiFetch<{ message: string; itemid: string }>("/items/internal", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  }),
+
+  addTrapperItem: (payload: {
+    hostname: string; item_name: string; item_key: string; value_type?: number;
+    allow_traps?: boolean; history?: string; trends?: string;
+    description?: string; status?: number;
+  }) => apiFetch<{ message: string; itemid: string }>("/items/trapper", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  }),
+
+  addExternalItem: (payload: {
+    hostname: string; item_name: string; item_key: string; value_type?: number;
+    delay?: string; units?: string; history?: string; trends?: string;
+    description?: string; status?: number;
+  }) => apiFetch<{ message: string; itemid: string }>("/items/external", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  }),
+
+  addIpmiItem: (payload: {
+    hostname: string; item_name?: string; ipmi_sensor: string; item_key?: string;
+    value_type?: number; delay?: string; units?: string;
+    history?: string; trends?: string; description?: string; status?: number;
+  }) => apiFetch<{ message: string; itemid: string }>("/items/ipmi", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  }),
+
+  addSshItem: (payload: {
+    hostname: string; item_name: string; params: string; item_key?: string;
+    authtype?: number; username?: string; password?: string;
+    publickey?: string; privatekey?: string; value_type?: number;
+    delay?: string; units?: string; history?: string; trends?: string;
+    description?: string; status?: number; timeout?: string;
+  }) => apiFetch<{ message: string; itemid: string }>("/items/ssh", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  }),
+
+  addTelnetItem: (payload: {
+    hostname: string; item_name: string; params: string; item_key?: string;
+    username?: string; password?: string; value_type?: number;
+    delay?: string; units?: string; history?: string; trends?: string;
+    description?: string; status?: number;
+  }) => apiFetch<{ message: string; itemid: string }>("/items/telnet", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  }),
+
+  addJmxItem: (payload: {
+    hostname: string; item_name: string; item_key: string;
+    jmx_endpoint?: string; username?: string; password?: string;
+    value_type?: number; delay?: string; units?: string;
+    history?: string; trends?: string; description?: string; status?: number;
+  }) => apiFetch<{ message: string; itemid: string }>("/items/jmx", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  }),
+
+  addCalculatedItem: (payload: {
+    hostname: string; item_name: string; item_key: string; formula: string;
+    value_type?: number; delay?: string; units?: string;
+    history?: string; trends?: string; description?: string; status?: number;
+  }) => apiFetch<{ message: string; itemid: string }>("/items/calculated", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  }),
+
+  addDependentItem: (payload: {
+    hostname: string; item_name: string; item_key: string; master_itemid: string;
+    value_type?: number; history?: string; trends?: string;
+    description?: string; status?: number;
+  }) => apiFetch<{ message: string; itemid: string }>("/items/dependent", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  }),
+
+  addZabbixScriptItem: (payload: {
+    hostname: string; item_name: string; item_key: string; params: string;
+    parameters?: Array<{ name: string; value: string }>; value_type?: number;
+    delay?: string; units?: string; history?: string; trends?: string;
+    description?: string; status?: number; timeout?: string;
+  }) => apiFetch<{ message: string; itemid: string }>("/items/zabbix-script", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  }),
+
+  addBrowserItem: (payload: {
+    hostname: string; item_name: string; item_key: string; params: string;
+    parameters?: Array<{ name: string; value: string }>; value_type?: number;
+    delay?: string; units?: string; history?: string; trends?: string;
+    description?: string; status?: number; timeout?: string;
+  }) => apiFetch<{ message: string; itemid: string }>("/items/browser", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  }),
+
   bulkAddItems: (payload: {
     hostnames: string[];
     item_type: string;
     item_name?: string;
     item_key?: string;
     value_type?: number;
+    delay?: string;
+    units?: string;
+    history?: string;
+    trends?: string;
+    description?: string;
     url?: string;
     request_method?: number;
     status_codes?: string;
@@ -649,9 +884,9 @@ export const api = {
     ),
   getProblemHistory: (params: { hours?: number; severityMin?: number; limit?: number } = {}) => {
     const q = new URLSearchParams();
-    if (params.hours) q.set("hours", String(params.hours));
-    if (params.severityMin) q.set("severity_min", String(params.severityMin));
-    if (params.limit) q.set("limit", String(params.limit));
+    if (params.hours != null) q.set("hours", String(params.hours));
+    if (params.severityMin != null) q.set("severity_min", String(params.severityMin));
+    if (params.limit != null) q.set("limit", String(params.limit));
     return apiFetch<{
       problems: {
         eventid: string;
@@ -670,4 +905,280 @@ export const api = {
       }[];
     }>(`/metrics/problems/history?${q}`);
   },
+
+  // ── Data Collection ──────────────────────────────────────────────────
+  listTemplateGroups: () =>
+    apiFetch<{ groups: Array<{ groupid: string; name: string; template_count: number }> }>("/dc/template-groups"),
+  createTemplateGroup: (name: string) =>
+    apiFetch<{ groupid: string; message: string }>("/dc/template-groups", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }),
+  updateTemplateGroup: (groupid: string, name: string) =>
+    apiFetch<{ message: string }>(`/dc/template-groups/${groupid}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }),
+  deleteTemplateGroup: (groupid: string) =>
+    apiFetch<{ message: string }>(`/dc/template-groups/${groupid}`, { method: "DELETE" }),
+  getTemplateGroupMembers: (groupid: string) =>
+    apiFetch<{ templates: Array<{ templateid: string; name: string; description: string }> }>(`/dc/template-groups/${groupid}/members`),
+
+  listHostGroups: () =>
+    apiFetch<{ groups: Array<{ groupid: string; name: string; host_count: number }> }>("/dc/host-groups"),
+  createHostGroup: (name: string) =>
+    apiFetch<{ groupid: string; message: string }>("/dc/host-groups", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }),
+  updateHostGroup: (groupid: string, name: string) =>
+    apiFetch<{ message: string }>(`/dc/host-groups/${groupid}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }),
+  deleteHostGroup: (groupid: string) =>
+    apiFetch<{ message: string }>(`/dc/host-groups/${groupid}`, { method: "DELETE" }),
+  getHostGroupMembers: (groupid: string) =>
+    apiFetch<{ hosts: Array<{ hostid: string; host: string; name: string; status: number }> }>(`/dc/host-groups/${groupid}/members`),
+
+  listDcTemplates: (search?: string) =>
+    apiFetch<{
+      templates: Array<{
+        templateid: string;
+        name: string;
+        description: string;
+        groups: Array<{ groupid: string; name: string }>;
+        linked_templates: Array<{ templateid: string; name: string }>;
+      }>;
+    }>(`/dc/templates${search ? `?search=${encodeURIComponent(search)}` : ""}`),
+  createDcTemplate: (payload: {
+    name: string;
+    group_ids: string[];
+    description?: string;
+    visible_name?: string;
+    template_ids?: string[];
+    tags?: Array<{ tag: string; value: string }>;
+    macros?: Array<{ macro: string; value: string; description?: string }>;
+  }) =>
+    apiFetch<{ templateid: string; message: string }>("/dc/templates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  deleteDcTemplate: (templateid: string) =>
+    apiFetch<{ message: string }>(`/dc/templates/${templateid}`, { method: "DELETE" }),
+
+  listMaintenances: () =>
+    apiFetch<{
+      maintenances: Array<{
+        maintenanceid: string;
+        name: string;
+        maintenance_type: string;
+        active_since: number;
+        active_till: number;
+        description: string;
+        hosts: Array<{ hostid: string; name: string }>;
+        groups: Array<{ groupid: string; name: string }>;
+      }>;
+    }>("/dc/maintenances"),
+  createMaintenance: (payload: {
+    name: string;
+    maintenance_type: number;
+    active_since: number;
+    active_till: number;
+    hostids?: string[];
+    groupids?: string[];
+    description?: string;
+  }) =>
+    apiFetch<{ maintenanceid: string; message: string }>("/dc/maintenances", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  deleteMaintenance: (maintenanceid: string) =>
+    apiFetch<{ message: string }>(`/dc/maintenances/${maintenanceid}`, { method: "DELETE" }),
+
+  listCorrelations: () =>
+    apiFetch<{
+      correlations: Array<{
+        correlationid: string;
+        name: string;
+        description: string;
+        status: string;
+        condition_count: number;
+        operation_count: number;
+      }>;
+    }>("/dc/correlations"),
+  createCorrelation: (payload: { name: string; description?: string; status?: number; conditions?: Array<{ type: number; operator: number; tag?: string; value?: string }>; evaltype?: number; operation_type?: number }) =>
+    apiFetch<{ correlationid: string; message: string }>("/dc/correlations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  deleteCorrelation: (correlationid: string) =>
+    apiFetch<{ message: string }>(`/dc/correlations/${correlationid}`, { method: "DELETE" }),
+
+  listDiscoveryRules: () =>
+    apiFetch<{
+      rules: Array<{
+        druleid: string;
+        name: string;
+        iprange: string;
+        delay: string;
+        status: string;
+        nextcheck: number;
+        check_count: number;
+      }>;
+    }>("/dc/discovery-rules"),
+  createDiscoveryRule: (payload: { name: string; iprange: string; delay: string; check_types: string[]; ports?: string }) =>
+    apiFetch<{ druleid: string; message: string }>("/dc/discovery-rules", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  deleteDiscoveryRule: (druleid: string) =>
+    apiFetch<{ message: string }>(`/dc/discovery-rules/${druleid}`, { method: "DELETE" }),
+
+  // ── Reports ──────────────────────────────────────────────────────────
+  getTopTriggers: (params?: { limit?: number; severity_min?: number; hours?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    if (params?.severity_min != null) q.set("severity_min", String(params.severity_min));
+    if (params?.hours != null) q.set("hours", String(params.hours));
+    return apiFetch<{ triggers: Array<{ triggerid: string; description: string; priority: number; severity_label: string; lastchange: number; status: number; value: number; hosts: Array<{ hostid: string; host: string }>; last_event: Record<string, unknown> | null }> }>(`/reports/top-triggers${q.toString() ? `?${q}` : ""}`);
+  },
+  getAuditLog: (params?: { limit?: number; hours?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    if (params?.hours != null) q.set("hours", String(params.hours));
+    return apiFetch<{ entries: Array<{ auditid: string; userid: string; username: string; clock: number; action: string; resourcetype: string; resourceid: string; resourcename: string; ip: string; details: string }> }>(`/reports/audit-log${q.toString() ? `?${q}` : ""}`);
+  },
+  getActionLog: (params?: { limit?: number; hours?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.limit) q.set("limit", String(params.limit));
+    if (params?.hours) q.set("hours", String(params.hours));
+    return apiFetch<{ entries: Array<{ alertid: string; actionid: string; eventid: string; clock: number; message: string; subject: string; sendto: string; status: number; retries: number; error: string; alerttype: number; mediatypeid: string; userid: string }> }>(`/reports/action-log${q.toString() ? `?${q}` : ""}`);
+  },
+  getAvailability: (params?: { hours?: number; groupid?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.hours) q.set("hours", String(params.hours));
+    if (params?.groupid) q.set("groupid", params.groupid);
+    return apiFetch<{ hosts: Array<{ hostid: string; hostname: string; downtime_seconds: number; problem_count: number; availability_pct: number }> }>(`/reports/availability${q.toString() ? `?${q}` : ""}`);
+  },
+  getNotificationHistory: (params?: { hours?: number; limit?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.hours) q.set("hours", String(params.hours));
+    if (params?.limit) q.set("limit", String(params.limit));
+    return apiFetch<{ notifications: Array<{ alertid: string; clock: number; sendto: string; subject: string; status: number; status_label: string; error: string; username: string; media_type: string }> }>(`/reports/notifications${q.toString() ? `?${q}` : ""}`);
+  },
+  getAuthSettings: () =>
+    apiFetch<Record<string, string>>("/admin/auth"),
+  updateAuthSettings: (payload: Record<string, string | number>) =>
+    apiFetch<{ ok: boolean }>("/admin/auth", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+
+  // ── Actions ───────────────────────────────────────────────────────────
+  listActions: (eventsource?: number) =>
+    apiFetch<{ actions: Array<{ actionid: string; name: string; eventsource: number; eventsource_label: string; status: number; esc_period: string; condition_count: number; operation_count: number }> }>(`/actions${eventsource != null ? `?eventsource=${eventsource}` : ""}`),
+  createAction: (payload: { name: string; eventsource: number; esc_period?: string }) =>
+    apiFetch<{ actionid: string }>("/actions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  deleteAction: (actionid: string) =>
+    apiFetch<{ ok: boolean }>(`/actions/${actionid}`, { method: "DELETE" }),
+  toggleAction: (actionid: string, status: number) =>
+    apiFetch<{ ok: boolean }>(`/actions/${actionid}/toggle`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) }),
+
+  // ── Media Types ───────────────────────────────────────────────────────
+  listMediaTypes: () =>
+    apiFetch<{ media_types: Array<{ mediatypeid: string; name: string; type: number; type_label: string; status: number; description: string }> }>("/media-types"),
+  createMediaType: (payload: { name: string; type: number; description?: string; smtp_server?: string; smtp_helo?: string; smtp_email?: string; script?: string; webhook_script?: string }) =>
+    apiFetch<{ mediatypeid: string }>("/media-types", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  deleteMediaType: (mediatypeid: string) =>
+    apiFetch<{ ok: boolean }>(`/media-types/${mediatypeid}`, { method: "DELETE" }),
+  toggleMediaType: (mediatypeid: string, status: number) =>
+    apiFetch<{ ok: boolean }>(`/media-types/${mediatypeid}/toggle`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) }),
+
+  // ── Scripts ───────────────────────────────────────────────────────────
+  listScripts: () =>
+    apiFetch<{ scripts: Array<{ scriptid: string; name: string; command: string; execute_on: number; execute_on_label: string; scope: number; scope_label: string; description: string; groupid: string }> }>("/scripts"),
+  createScript: (payload: { name: string; command: string; execute_on?: number; scope?: number; description?: string }) =>
+    apiFetch<{ scriptid: string }>("/scripts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  deleteScript: (scriptid: string) =>
+    apiFetch<{ ok: boolean }>(`/scripts/${scriptid}`, { method: "DELETE" }),
+
+  // ── Zabbix users (for group assignment) ──────────────────────────────
+  listZabbixUsers: () =>
+    apiFetch<{ users: Array<{ userid: string; username: string; display: string }> }>("/zabbix-users"),
+
+  // ── User Groups ───────────────────────────────────────────────────────
+  listUserGroups: () =>
+    apiFetch<{ groups: Array<{ usrgrpid: string; name: string; gui_access: number; gui_access_label: string; users_status: number; users_status_label: string; user_count: number; users: Array<{ userid: string; username: string }> }> }>("/user-groups"),
+  createUserGroup: (payload: {
+    name: string;
+    gui_access?: number;
+    users_status?: number;
+    debug_mode?: number;
+    userids?: string[];
+    hostgroup_rights?: Array<{ id: string; permission: number }>;
+    templategroup_rights?: Array<{ id: string; permission: number }>;
+    tag_filters?: Array<{ groupid: string; tag?: string; value?: string }>;
+  }) =>
+    apiFetch<{ usrgrpid: string }>("/user-groups", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  deleteUserGroup: (usrgrpid: string) =>
+    apiFetch<{ ok: boolean }>(`/user-groups/${usrgrpid}`, { method: "DELETE" }),
+
+  // ── Roles ─────────────────────────────────────────────────────────────
+  listZabbixRoles: () =>
+    apiFetch<{ roles: Array<{ roleid: string; name: string; type: number; type_label: string; readonly: number; rule_count: number }> }>("/roles"),
+  createRole: (payload: {
+    name: string;
+    type: number;
+    ui_access?: Record<string, boolean>;
+    ui_default_access?: number;
+    services_read_mode?: number;
+    services_write_mode?: number;
+    modules_default_access?: number;
+    api_access?: number;
+  }) =>
+    apiFetch<{ roleid: string }>("/roles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  updateRole: (roleid: string, payload: { name: string }) =>
+    apiFetch<{ ok: boolean }>(`/roles/${roleid}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  deleteRole: (roleid: string) =>
+    apiFetch<{ ok: boolean }>(`/roles/${roleid}`, { method: "DELETE" }),
+
+  // ── API Tokens ────────────────────────────────────────────────────────
+  listApiTokens: () =>
+    apiFetch<{ tokens: Array<{ tokenid: string; name: string; userid: string; username: string; status: number; expires_at: number; created_at: number; lastaccess: number }> }>("/api-tokens"),
+  createApiToken: (payload: { name: string; userid: string; expires_at?: number }) =>
+    apiFetch<{ tokenid: string; token: string | null }>("/api-tokens", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  deleteApiToken: (tokenid: string) =>
+    apiFetch<{ ok: boolean }>(`/api-tokens/${tokenid}`, { method: "DELETE" }),
+
+  // ── Administration ────────────────────────────────────────────────────
+  listProxies: () =>
+    apiFetch<{ proxies: Array<{ proxyid: string; name: string; mode: number; mode_label: string; description: string; lastaccess: number; version: string; host_count: number }> }>("/proxies"),
+  createProxy: (payload: { name: string; operating_mode: number; description?: string }) =>
+    apiFetch<{ proxyid: string }>("/proxies", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  updateProxy: (proxyid: string, payload: { name: string; description?: string }) =>
+    apiFetch<{ ok: boolean }>(`/proxies/${proxyid}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  deleteProxy: (proxyid: string) =>
+    apiFetch<{ ok: boolean }>(`/proxies/${proxyid}`, { method: "DELETE" }),
+  listProxyGroups: () =>
+    apiFetch<{ proxy_groups: Array<{ proxygroupid: string; name: string; failover_delay: string; min_online: number; description: string; proxy_count: number }> }>("/proxy_groups"),
+  createProxyGroup: (payload: { name: string; failover_delay?: string; min_online?: number; description?: string }) =>
+    apiFetch<{ proxygroupid: string }>("/proxy_groups", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  deleteProxyGroup: (proxygroupid: string) =>
+    apiFetch<{ ok: boolean }>(`/proxy_groups/${proxygroupid}`, { method: "DELETE" }),
+  listMacros: () =>
+    apiFetch<{ macros: Array<{ globalmacroid: string; macro: string; value: string; type: number; type_label: string; description: string }> }>("/macros"),
+  createMacro: (payload: { macro: string; value: string; description?: string; type?: number }) =>
+    apiFetch<{ globalmacroid: string }>("/macros", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  updateMacro: (globalmacroid: string, payload: { value: string; description?: string }) =>
+    apiFetch<{ ok: boolean }>(`/macros/${globalmacroid}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  deleteMacro: (globalmacroid: string) =>
+    apiFetch<{ ok: boolean }>(`/macros/${globalmacroid}`, { method: "DELETE" }),
+  getQueue: () =>
+    apiFetch<{ items: Array<Record<string, string>>; total: number; error?: string }>("/admin/queue"),
+  getAdminSettings: () =>
+    apiFetch<Record<string, string>>("/admin/settings"),
+  updateHousekeeping: (payload: Record<string, string | number>) =>
+    apiFetch<{ ok: boolean }>("/admin/housekeeping", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+
+  // ── Services ──────────────────────────────────────────────────────────
+  listServices: (parentid?: string) =>
+    apiFetch<{ services: Array<{ serviceid: string; name: string; algorithm: number; algorithm_label: string; sortorder: number; weight: number; status: number; description: string; tags: Array<{ tag: string; value: string }>; children: Array<{ serviceid: string; name: string }>; parents: Array<{ serviceid: string; name: string }> }> }>(`/services${parentid ? `?parentid=${parentid}` : ""}`),
+  createService: (payload: { name: string; algorithm?: number; sortorder?: number; weight?: number; description?: string }) =>
+    apiFetch<{ serviceid: string }>("/services", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  updateService: (serviceid: string, payload: { name?: string; algorithm?: number; description?: string }) =>
+    apiFetch<{ ok: boolean }>(`/services/${serviceid}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  deleteService: (serviceid: string) =>
+    apiFetch<{ ok: boolean }>(`/services/${serviceid}`, { method: "DELETE" }),
+
+  // ── SLA ───────────────────────────────────────────────────────────────
+  listSlas: () =>
+    apiFetch<{ slas: Array<{ slaid: string; name: string; slo: number; period: string; period_label: string; timezone: string; description: string; status: number; effective_date: number; service_tags: Array<{ tag: string; value: string }> }> }>("/sla"),
+  createSla: (payload: { name: string; slo: number; period?: string; timezone?: string; description?: string; service_tags?: Array<{ tag: string; value: string }> }) =>
+    apiFetch<{ slaid: string }>("/sla", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  deleteSla: (slaid: string) =>
+    apiFetch<{ ok: boolean }>(`/sla/${slaid}`, { method: "DELETE" }),
+  getSlaReport: (slaid: string, periods?: number) =>
+    apiFetch<{ report: Array<Record<string, unknown>> }>(`/sla/${slaid}/report${periods ? `?periods=${periods}` : ""}`),
+
+  // ── Health Monitors ───────────────────────────────────────────────────
+  listHealthMonitors: (hostid?: string) =>
+    apiFetch<{ monitors: Array<{ itemid: string; name: string; host: string; hostid: string; url: string; expected: string; running: boolean; working: boolean; last_value: string | null; last_check: number | null; proc_itemid: string | null; has_proc_check: boolean }> }>(`/health-monitors${hostid ? `?hostid=${hostid}` : ""}`),
+  createHealthMonitor: (payload: { hostid: string; name: string; url: string; expected_contains?: string; process_name?: string }) =>
+    apiFetch<{ itemid: string; proc_itemid: string | null }>("/health-monitors", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  deleteHealthMonitor: (itemid: string) =>
+    apiFetch<{ ok: boolean }>(`/health-monitors/${itemid}`, { method: "DELETE" }),
 };

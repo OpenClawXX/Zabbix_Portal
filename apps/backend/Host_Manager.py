@@ -1,3 +1,5 @@
+import csv
+import io
 import logging
 from Zabbix_Base import Zabbix_Base
 import openpyxl
@@ -100,7 +102,9 @@ class Host_Manager(Zabbix_Base):
     # ------------------------------------------------------------------
 
     def create_server(
-        self, hostname, ip_address, group_id="2", template_name="Linux by Zabbix agent"
+        self, hostname, ip_address, group_ids: list[str] | None = None,
+        group_id="2", template_name="Linux by Zabbix agent",
+        proxyid: str | None = None,
     ):
         """Creates a host in Zabbix and links it to a template."""
         if not self.zapi:
@@ -111,10 +115,16 @@ class Host_Manager(Zabbix_Base):
         if not tid:
             return None
 
+        resolved_groups = (
+            [{"groupid": gid} for gid in group_ids]
+            if group_ids
+            else [{"groupid": group_id}]
+        )
+
         try:
-            result = self.zapi.host.create(
-                host=hostname,
-                interfaces=[
+            params: dict = {
+                "host": hostname,
+                "interfaces": [
                     {
                         "type": 1,
                         "main": 1,
@@ -124,11 +134,18 @@ class Host_Manager(Zabbix_Base):
                         "port": "10050",
                     }
                 ],
-                groups=[{"groupid": group_id}],
-                templates=[{"templateid": tid}],
-            )
+                "groups": resolved_groups,
+                "templates": [{"templateid": tid}],
+            }
+            if proxyid:
+                # Zabbix ≥7.0 uses "proxyid"; older versions use "proxy_hostid".
+                proxy_key = "proxyid" if self._zabbix_version >= (7, 0) else "proxy_hostid"
+                params[proxy_key] = proxyid
+
+            result = self.zapi.host.create(**params)
             host_id = result["hostids"][0]
             logger.info("Created host %r (ID: %s).", hostname, host_id)
+            self._invalidate("all_hosts")
             return host_id
 
         except Exception as e:
@@ -153,6 +170,7 @@ class Host_Manager(Zabbix_Base):
             host_id = host_data[0]["hostid"]
             self.zapi.host.delete([host_id])
             logger.info("Deleted host %r (ID: %s).", hostname, host_id)
+            self._invalidate("all_hosts")
             return True
 
         except Exception as e:
@@ -160,13 +178,21 @@ class Host_Manager(Zabbix_Base):
             return False
 
     def get_hosts(self, team_name: str | None = None):
-        """Retrieves hosts from Zabbix. Pass team_name to filter by the 'team' tag."""
+        """Retrieves hosts from Zabbix (60 s TTL cache for the unfiltered list)."""
+        if team_name is not None:
+            return self._fetch_hosts(team_name)
+        return self._cached("all_hosts", 60.0, lambda: self._fetch_hosts(None))
+
+    def _fetch_hosts(self, team_name: str | None = None):
         if not self.zapi:
             return []
 
+        # Zabbix ≥7.0 renamed proxy_hostid → proxyid on the host object.
+        proxy_field = "proxyid" if self._zabbix_version >= (7, 0) else "proxy_hostid"
+
         try:
             kwargs: dict = {
-                "output": ["hostid", "host", "name", "status"],
+                "output": ["hostid", "host", "name", "status", proxy_field],
                 "selectInterfaces": ["ip", "port", "type", "available"],
                 "selectTags": "extend",
             }
@@ -195,6 +221,11 @@ class Host_Manager(Zabbix_Base):
                     logger.warning("Could not fetch problem counts: %r", exc)
                     for h in hosts:
                         h["problem_count"] = 0
+
+            # Normalise proxy field to "proxyid" regardless of Zabbix version.
+            if proxy_field == "proxy_hostid":
+                for h in hosts:
+                    h["proxyid"] = h.pop("proxy_hostid", "0") or "0"
 
             logger.debug("Retrieved %d hosts.", len(hosts))
             return hosts
@@ -347,46 +378,96 @@ class Host_Manager(Zabbix_Base):
             logger.error("export_hosts_to_excel failed: %r", e)
             return None
 
+    # ------------------------------------------------------------------
+    # EXPORT HELPERS
+    # ------------------------------------------------------------------
+
+    _AVAIL_LABEL = {"0": "Unknown", "1": "Available", "2": "Unavailable"}
+    _EXPORT_HEADERS = [
+        "Host ID",
+        "Technical Name",
+        "Visible Name",
+        "Status",
+        "Availability",
+        "IP Address",
+        "Port",
+        "Proxy",
+        "Host Groups",
+        "Templates",
+        "Description",
+    ]
+
+    def _build_proxy_map(self) -> dict[str, str]:
+        """Returns {proxyid: proxy_name}. Tries the 6.0+ 'name' field, falls back to 'host'."""
+        try:
+            proxies = self.zapi.proxy.get(output=["proxyid", "name", "host"])  # type: ignore[union-attr]
+            return {p["proxyid"]: (p.get("name") or p.get("host") or "") for p in proxies}
+        except Exception:
+            return {}
+
+    def _fetch_export_rows(self, hostname_filter: set[str] | None = None) -> list[list[str]]:
+        """Returns a list of rows (each a list of str) for the host export."""
+        hosts = self.zapi.host.get(  # type: ignore[union-attr]
+            output=["hostid", "host", "name", "status", "description", "proxyid", "proxy_hostid"],
+            selectInterfaces=["ip", "port", "available", "type"],
+            selectGroups=["name"],
+            selectParentTemplates=["name"],
+        )
+        if hostname_filter is not None:
+            hosts = [h for h in hosts if h["host"] in hostname_filter]
+
+        proxy_map = self._build_proxy_map()
+
+        rows: list[list[str]] = []
+        for h in hosts:
+            interfaces = h.get("interfaces") or []
+            primary = next((i for i in interfaces if str(i.get("type")) == "1"), None) or (interfaces[0] if interfaces else None)
+            ip = primary["ip"] if primary else "N/A"
+            port = primary["port"] if primary else "N/A"
+            avail = self._AVAIL_LABEL.get(str(primary.get("available", "0")), "Unknown") if primary else "Unknown"
+            status = "Enabled" if h["status"] == "0" else "Disabled"
+            # proxyid is used in Zabbix 6.0+; proxy_hostid in older versions
+            pid = h.get("proxyid") or h.get("proxy_hostid") or "0"
+            proxy = proxy_map.get(pid, "") if pid and pid != "0" else "—"
+            groups = ", ".join(g["name"] for g in (h.get("groups") or []))
+            templates = ", ".join(t["name"] for t in (h.get("parentTemplates") or []))
+            description = (h.get("description") or "").strip()
+            rows.append([h["hostid"], h["host"], h["name"], status, avail, ip, port, proxy, groups, templates, description])
+        return rows
+
     def export_hosts_to_excel_bytes(self, hostname_filter: set[str] | None = None) -> bytes | None:
-        """Fetches hosts and returns an Excel (.xlsx) as bytes (no disk write).
-        hostname_filter=None exports all hosts; pass a set to restrict to those hostnames.
-        """
+        """Returns host inventory as .xlsx bytes."""
         if not self.zapi:
             logger.error("export_hosts_to_excel_bytes: no Zabbix API connection.")
             return None
-
         try:
-            hosts = self.zapi.host.get(
-                output=["hostid", "host", "name", "status"],
-                selectInterfaces=["ip", "port"],
-            )
-            if hostname_filter is not None:
-                hosts = [h for h in hosts if h["host"] in hostname_filter]
-
+            rows = self._fetch_export_rows(hostname_filter)
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Zabbix Hosts"
-
-            ws.append(
-                [
-                    "Host ID",
-                    "Technical Name",
-                    "Visible Name",
-                    "Status",
-                    "IP Address",
-                    "Port",
-                ]
-            )
-
-            for h in hosts:
-                ip = h["interfaces"][0]["ip"] if h.get("interfaces") else "N/A"
-                port = h["interfaces"][0]["port"] if h.get("interfaces") else "N/A"
-                status = "Enabled" if h["status"] == "0" else "Disabled"
-                ws.append([h["hostid"], h["host"], h["name"], status, ip, port])
-
+            ws.append(self._EXPORT_HEADERS)
+            for row in rows:
+                ws.append(row)
             buf = BytesIO()
             wb.save(buf)
             return buf.getvalue()
         except Exception as e:
             logger.error("export_hosts_to_excel_bytes failed: %r", e)
+            return None
+
+    def export_hosts_to_csv_bytes(self, hostname_filter: set[str] | None = None) -> bytes | None:
+        """Returns host inventory as .csv bytes (UTF-8 with BOM for Excel compat)."""
+        if not self.zapi:
+            logger.error("export_hosts_to_csv_bytes: no Zabbix API connection.")
+            return None
+        try:
+            rows = self._fetch_export_rows(hostname_filter)
+            buf = io.StringIO()
+            writer = csv.writer(buf)
+            writer.writerow(self._EXPORT_HEADERS)
+            writer.writerows(rows)
+            # UTF-8 BOM so Excel opens it correctly without an import wizard
+            return ("﻿" + buf.getvalue()).encode("utf-8")
+        except Exception as e:
+            logger.error("export_hosts_to_csv_bytes failed: %r", e)
             return None

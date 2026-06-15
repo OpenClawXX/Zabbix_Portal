@@ -33,4 +33,4 @@ USER 1001
 
 EXPOSE 6769
 
-CMD ["python", "-m", "uvicorn", "Zabbix_Main:app", "--host", "0.0.0.0", "--port", "6769"]
+CMD ["python", "-m", "uvicorn", "Zabbix_Main:app", "--host", "0.0.0.0", "--port", "6769", "--workers", "4"]

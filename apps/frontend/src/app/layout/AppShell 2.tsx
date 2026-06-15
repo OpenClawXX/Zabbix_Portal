@@ -16,6 +16,7 @@ import NotificationsNoneOutlinedIcon from "@mui/icons-material/NotificationsNone
 import PeopleOutlinedIcon from "@mui/icons-material/PeopleOutlined";
 import PlayArrowOutlinedIcon from "@mui/icons-material/PlayArrowOutlined";
 import StopOutlinedIcon from "@mui/icons-material/StopOutlined";
+import PlaylistAddOutlinedIcon from "@mui/icons-material/PlaylistAddOutlined";
 import UploadFileOutlinedIcon from "@mui/icons-material/UploadFileOutlined";
 import RefreshOutlinedIcon from "@mui/icons-material/RefreshOutlined";
 import ShowChartOutlinedIcon from "@mui/icons-material/ShowChartOutlined";
@@ -28,10 +29,6 @@ import AdminPanelSettingsOutlinedIcon from "@mui/icons-material/AdminPanelSettin
 import AssessmentOutlinedIcon from "@mui/icons-material/AssessmentOutlined";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-import KeyOutlinedIcon from "@mui/icons-material/KeyOutlined";
-import RouterOutlinedIcon from "@mui/icons-material/RouterOutlined";
-import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
-import TaskAltOutlinedIcon from "@mui/icons-material/TaskAltOutlined";
 import WarningAmberOutlinedIcon from "@mui/icons-material/WarningAmberOutlined";
 import {
   Alert,
@@ -56,8 +53,8 @@ import {
   Typography,
 } from "@mui/material";
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, PropsWithChildren, ReactNode } from "react";
 import { type AlertEvent, type Problem, type StoredNotif, api } from "../api";
 import {
@@ -74,123 +71,80 @@ import { useThemeMode } from "../context/ThemeContext";
 const drawerWidth = 240;
 
 type NavItem = { href: string; label: string; icon: ReactNode; adminOnly?: boolean };
-type NavGroup = { id: string; label: string; icon: ReactNode; items: NavItem[]; adminOnly?: boolean; href?: string; sectionLabel?: string };
+type NavGroup = { id: string; label: string; icon: ReactNode; items: NavItem[]; adminOnly?: boolean };
 
 const navGroups: NavGroup[] = [
-  // ── Top-level direct links ────────────────────────────────────────────
   {
-    id: "overview",
-    label: "Overview",
-    icon: <DashboardOutlinedIcon sx={{ fontSize: 18 }} />,
-    href: "/",
-    items: [],
+    id: "monitoring",
+    label: "Monitoring",
+    icon: <ShowChartOutlinedIcon sx={{ fontSize: 15 }} />,
+    items: [
+      { href: "/", label: "Overview", icon: <DashboardOutlinedIcon sx={{ fontSize: 16 }} /> },
+      { href: "/dashboard", label: "Dashboard", icon: <SpaceDashboardOutlinedIcon sx={{ fontSize: 16 }} /> },
+      { href: "/metrics", label: "Metrics", icon: <ShowChartOutlinedIcon sx={{ fontSize: 16 }} /> },
+    ],
   },
   {
     id: "hosts",
     label: "Hosts",
-    icon: <ComputerOutlinedIcon sx={{ fontSize: 18 }} />,
-    href: "/hosts",
-    items: [],
-  },
-  {
-    id: "dashboard",
-    label: "Dashboard",
-    icon: <SpaceDashboardOutlinedIcon sx={{ fontSize: 18 }} />,
-    href: "/dashboard",
-    items: [],
-  },
-  // ── Monitoring ────────────────────────────────────────────────────────
-  {
-    id: "monitoring",
-    label: "Monitoring",
-    icon: <ShowChartOutlinedIcon sx={{ fontSize: 18 }} />,
+    icon: <ComputerOutlinedIcon sx={{ fontSize: 15 }} />,
     items: [
-      { href: "/metrics?tab=problems",     label: "Problems",     icon: <WarningAmberOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/metrics?tab=latest-data", label: "Latest Data",  icon: <StorageOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/items",                   label: "Items",        icon: <StorageOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/triggers",                label: "Triggers",     icon: <TaskAltOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/metrics?tab=item-graphs", label: "Graphs",       icon: <ShowChartOutlinedIcon sx={{ fontSize: 16 }} /> },
+      { href: "/hosts", label: "Hosts", icon: <ComputerOutlinedIcon sx={{ fontSize: 16 }} /> },
+      { href: "/items", label: "Items", icon: <PlaylistAddOutlinedIcon sx={{ fontSize: 16 }} /> },
+      { href: "/teams", label: "Teams", icon: <GroupsOutlinedIcon sx={{ fontSize: 16 }} /> },
     ],
   },
   {
     id: "services",
     label: "Services",
-    icon: <AccountTreeOutlinedIcon sx={{ fontSize: 18 }} />,
+    icon: <AccountTreeOutlinedIcon sx={{ fontSize: 15 }} />,
     items: [
-      { href: "/services?tab=services", label: "Services", icon: <AccountTreeOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/services?tab=sla",      label: "SLA",      icon: <TaskAltOutlinedIcon sx={{ fontSize: 16 }} /> },
+      { href: "/services", label: "Services & SLA", icon: <AccountTreeOutlinedIcon sx={{ fontSize: 16 }} /> },
     ],
   },
   {
     id: "reports",
     label: "Reports",
-    icon: <AssessmentOutlinedIcon sx={{ fontSize: 18 }} />,
+    icon: <AssessmentOutlinedIcon sx={{ fontSize: 15 }} />,
     items: [
-      { href: "/reports?tab=availability",     label: "Availability report", icon: <AssessmentOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/reports?tab=top-triggers",     label: "Top 100 triggers",    icon: <AssessmentOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/reports?tab=audit-log",        label: "Audit log",           icon: <AssessmentOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/reports?tab=action-log",       label: "Action log",          icon: <AssessmentOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/metrics?tab=notifications",    label: "Notifications",       icon: <NotificationsNoneOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/metrics?tab=history",           label: "Problem history",     icon: <AssessmentOutlinedIcon sx={{ fontSize: 16 }} /> },
+      { href: "/reports", label: "Reports", icon: <AssessmentOutlinedIcon sx={{ fontSize: 16 }} /> },
     ],
   },
-  // ── Admin section (divider before this) ──────────────────────────────
   {
     id: "data-collection",
-    label: "Data collection",
-    icon: <StorageOutlinedIcon sx={{ fontSize: 18 }} />,
+    label: "Data Collection",
+    icon: <StorageOutlinedIcon sx={{ fontSize: 15 }} />,
     adminOnly: true,
-    sectionLabel: "Administration",
     items: [
-      { href: "/data-collection?tab=template-groups",   label: "Template groups",   icon: <StorageOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/data-collection?tab=host-groups",       label: "Host groups",       icon: <StorageOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/data-collection?tab=templates",         label: "Templates",         icon: <StorageOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/data-collection?tab=maintenance",       label: "Maintenance",       icon: <StorageOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/data-collection?tab=event-correlation", label: "Event correlation", icon: <StorageOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/data-collection?tab=discovery",         label: "Discovery",         icon: <StorageOutlinedIcon sx={{ fontSize: 16 }} /> },
+      { href: "/data-collection", label: "Data Collection", icon: <StorageOutlinedIcon sx={{ fontSize: 16 }} /> },
     ],
   },
   {
     id: "alerts",
     label: "Alerts",
-    icon: <NotificationsActiveOutlinedIcon sx={{ fontSize: 18 }} />,
+    icon: <NotificationsActiveOutlinedIcon sx={{ fontSize: 15 }} />,
     adminOnly: true,
     items: [
-      { href: "/metrics?tab=alert-rules",               label: "Alert rules",       icon: <WarningAmberOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/alerts-management?tab=trigger-actions",  label: "Trigger actions",  icon: <NotificationsActiveOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/alerts-management?tab=service-actions",  label: "Service actions",  icon: <NotificationsActiveOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/alerts-management?tab=discovery-actions",label: "Discovery actions",icon: <NotificationsActiveOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/alerts-management?tab=autoregistration",label: "Autoregistration",  icon: <NotificationsActiveOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/alerts-management?tab=internal",        label: "Internal actions",  icon: <NotificationsActiveOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/alerts-management?tab=media-types",     label: "Media types",       icon: <NotificationsActiveOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/alerts-management?tab=scripts",         label: "Scripts",           icon: <NotificationsActiveOutlinedIcon sx={{ fontSize: 16 }} /> },
+      { href: "/alerts-management", label: "Alerts Management", icon: <NotificationsActiveOutlinedIcon sx={{ fontSize: 16 }} /> },
     ],
   },
   {
     id: "users",
     label: "Users",
-    icon: <PeopleOutlinedIcon sx={{ fontSize: 18 }} />,
+    icon: <PeopleOutlinedIcon sx={{ fontSize: 15 }} />,
     adminOnly: true,
     items: [
-      { href: "/users-management?tab=user-groups",    label: "User groups",    icon: <GroupsOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/users-management?tab=roles",          label: "User roles",     icon: <AdminPanelSettingsOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/users",                               label: "Users",          icon: <PeopleOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/users-management?tab=api-tokens",     label: "API tokens",     icon: <KeyOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/teams",                               label: "Teams",          icon: <GroupsOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/users-management?tab=authentication", label: "Authentication", icon: <SettingsOutlinedIcon sx={{ fontSize: 16 }} /> },
+      { href: "/users", label: "Users", icon: <PeopleOutlinedIcon sx={{ fontSize: 16 }} /> },
+      { href: "/users-management", label: "User Groups & Roles", icon: <GroupsOutlinedIcon sx={{ fontSize: 16 }} /> },
     ],
   },
   {
     id: "administration",
     label: "Administration",
-    icon: <SettingsOutlinedIcon sx={{ fontSize: 18 }} />,
+    icon: <AdminPanelSettingsOutlinedIcon sx={{ fontSize: 15 }} />,
     adminOnly: true,
     items: [
-      { href: "/administration?tab=housekeeping",  label: "Housekeeping",  icon: <SettingsOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/administration?tab=proxies",       label: "Proxies",       icon: <RouterOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/administration?tab=proxy-groups",  label: "Proxy groups",  icon: <RouterOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/administration?tab=macros",        label: "Macros",        icon: <SettingsOutlinedIcon sx={{ fontSize: 16 }} /> },
-      { href: "/administration?tab=queue",         label: "Queue",         icon: <SettingsOutlinedIcon sx={{ fontSize: 16 }} /> },
+      { href: "/administration", label: "Administration", icon: <AdminPanelSettingsOutlinedIcon sx={{ fontSize: 16 }} /> },
     ],
   },
 ];
@@ -309,11 +263,7 @@ const formatAge = (clock: number) => {
   const s = Math.floor(Date.now() / 1000) - clock;
   if (s < 60) return `${s}s ago`;
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  if (s < 7 * 86400) return `${Math.floor(s / 86400)}d ago`;
-  if (s < 30 * 86400) return `${Math.floor(s / (7 * 86400))}w ago`;
-  if (s < 365 * 86400) return `${Math.floor(s / (30 * 86400))}mo ago`;
-  return `${Math.floor(s / (365 * 86400))}y ago`;
+  return `${Math.floor(s / 3600)}h ago`;
 };
 
 // ── Notification card ─────────────────────────────────────────────────────────
@@ -877,25 +827,17 @@ const NotificationCenter = ({
 
 // ── AppShell ──────────────────────────────────────────────────────────────────
 
-const AppShellInner = ({ children }: PropsWithChildren) => {
+export const AppShell = ({ children }: PropsWithChildren) => {
   const pathname = usePathname();
-
-  const searchParams = useSearchParams();
+  const router = useRouter();
   const { user, logout } = useAuth();
-
-  const isNavItemActive = (href: string): boolean => {
-    const qi = href.indexOf("?");
-    if (qi === -1) return pathname === href;
-    const itemTab = new URLSearchParams(href.slice(qi + 1)).get("tab");
-    return pathname === href.slice(0, qi) && searchParams.get("tab") === itemTab;
-  };
   const { mode, toggle: toggleMode } = useThemeMode();
   const isDark = mode === "dark";
   const [mobileOpen, setMobileOpen] = useState(false);
   const [health, setHealth] = useState<{ ok: boolean; zabbix: boolean } | null>(null);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
     const state: Record<string, boolean> = {};
-    for (const g of navGroups) state[g.id] = false;
+    for (const g of navGroups) state[g.id] = true;
     return state;
   });
   const toggleGroup = (id: string) => setOpenGroups((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -1003,10 +945,6 @@ const AppShellInner = ({ children }: PropsWithChildren) => {
   const seenEventIds = useRef<Set<number>>(new Set());
   const firstPoll = useRef(true);
   const firstEventPoll = useRef(true);
-  // Unix timestamp of the first successful problems poll. Problems with
-  // clock <= this value existed before the app loaded and must never fire
-  // a popup, regardless of seenIds state.
-  const polledSince = useRef(0);
   const soundRef = useRef(soundEnabled);
   soundRef.current = soundEnabled;
   const soundPresetRef = useRef(soundPreset);
@@ -1109,7 +1047,7 @@ const AppShellInner = ({ children }: PropsWithChildren) => {
     });
   };
 
-  // ── Health poll (30 s — staggered 0 s offset) ───────────────────────────
+  // ── Health poll ──────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
@@ -1121,14 +1059,14 @@ const AppShellInner = ({ children }: PropsWithChildren) => {
       }
     };
     void load();
-    const t = window.setInterval(load, 10_000);
+    const t = window.setInterval(load, 15_000);
     return () => {
       cancelled = true;
       window.clearInterval(t);
     };
   }, []);
 
-  // ── Problem poll (30 s — staggered 5 s after mount) ─────────────────────
+  // ── Problem poll ─────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
     const poll = async () => {
@@ -1142,7 +1080,6 @@ const AppShellInner = ({ children }: PropsWithChildren) => {
 
         if (firstPoll.current) {
           // Seed known IDs on load — don't alert for pre-existing problems
-          polledSince.current = Math.floor(Date.now() / 1000);
           for (const id of currentIds) seenIds.current.add(id);
           firstPoll.current = false;
           return;
@@ -1153,16 +1090,8 @@ const AppShellInner = ({ children }: PropsWithChildren) => {
           if (!currentIds.has(id)) seenIds.current.delete(id);
         }
 
-        // All unseen problems — add to seenIds regardless of ack status so we
-        // don't re-notify on the next cycle even if they become unacknowledged.
-        const unseenProblems = problems.filter((p) => !seenIds.current.has(p.eventid));
-        for (const p of unseenProblems) seenIds.current.add(p.eventid);
-
-        // Only pop + sound for problems that are unacknowledged AND fired
-        // after the app loaded (blocks week-old pre-existing problems).
-        const newProblems = unseenProblems.filter(
-          (p) => !p.acknowledged && p.clock > polledSince.current,
-        );
+        const newProblems = problems.filter((p) => !seenIds.current.has(p.eventid));
+        for (const p of newProblems) seenIds.current.add(p.eventid);
 
         if (newProblems.length > 0) {
           setNotifications((prev) => [...newProblems, ...prev].slice(0, 8));
@@ -1190,15 +1119,11 @@ const AppShellInner = ({ children }: PropsWithChildren) => {
       }
     };
 
-    const delay = window.setTimeout(() => { void poll(); }, 5_000);
-    const t = window.setInterval(poll, 10_000);
-    // Re-fetch immediately when any page acknowledges a problem
-    window.addEventListener("problemAcknowledged", poll);
+    void poll();
+    const t = window.setInterval(poll, 30_000);
     return () => {
       cancelled = true;
-      window.clearTimeout(delay);
       window.clearInterval(t);
-      window.removeEventListener("problemAcknowledged", poll);
     };
   }, []);
 
@@ -1211,14 +1136,13 @@ const AppShellInner = ({ children }: PropsWithChildren) => {
         if (cancelled) return;
 
         if (firstEventPoll.current) {
-          seenEventIds.current = new Set(res.events.map((e) => e.id));
+          for (const e of res.events) seenEventIds.current.add(e.id);
           firstEventPoll.current = false;
           return;
         }
 
         const newEvents = res.events.filter((e) => !seenEventIds.current.has(e.id));
-        // Replace (not grow) the set — keeps it bounded to the latest response size.
-        seenEventIds.current = new Set(res.events.map((e) => e.id));
+        for (const e of newEvents) seenEventIds.current.add(e.id);
 
         if (newEvents.length > 0) {
           const asProblems: Problem[] = newEvents.map((e: AlertEvent) => ({
@@ -1266,12 +1190,11 @@ const AppShellInner = ({ children }: PropsWithChildren) => {
         // silently fail
       }
     };
-    // Stagger 10 s after problems poll to avoid simultaneous bursts.
-    const delay = window.setTimeout(() => { void poll(); }, 10_000);
+    void poll();
+    // Poll custom alert events frequently so a fired rule surfaces ASAP.
     const t = window.setInterval(poll, 10_000);
     return () => {
       cancelled = true;
-      window.clearTimeout(delay);
       window.clearInterval(t);
     };
   }, []);
@@ -1287,16 +1210,14 @@ const AppShellInner = ({ children }: PropsWithChildren) => {
 
   const pageTitle = useMemo(() => {
     for (const g of navGroups) {
-      if (g.href && pathname === g.href) return g.label;
-      const found = g.items.find((n) => isNavItemActive(n.href));
+      const found = g.items.find((n) => n.href === pathname);
       if (found) return found.label;
     }
     return "Overwatch";
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pathname, searchParams]);
+  }, [pathname]);
 
   const initials = user?.username.slice(0, 2).toUpperCase() ?? "??";
-  const problemCount = activeProblems.filter((p) => !p.acknowledged).length;
+  const problemCount = activeProblems.length;
 
   const drawer = (
     <Box sx={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -1346,66 +1267,15 @@ const AppShellInner = ({ children }: PropsWithChildren) => {
       <List sx={{ px: 1, pt: 1, flex: 1, overflowY: "auto" }} disablePadding>
         {navGroups
           .filter((group) => {
-            if (group.id !== "administration") return true;
+            if (!group.adminOnly) return true;
             const roles = user?.roles ?? [];
             return roles.includes("root") || roles.includes("team_lead");
           })
           .map((group) => {
-            // Direct-link group (no children, no expand arrow)
-            if (group.href) {
-              const isActive = pathname === group.href;
-              return (
-                <Box key={group.id} sx={{ mb: 0.25 }}>
-                  {group.sectionLabel && (
-                    <>
-                      <Divider sx={{ my: 1 }} />
-                      <Typography variant="caption" sx={{ px: 1.5, py: 0.25, display: "block", color: "text.disabled", fontSize: "0.6rem", textTransform: "uppercase", letterSpacing: "0.1em" }}>
-                        {group.sectionLabel}
-                      </Typography>
-                    </>
-                  )}
-                  <ListItemButton
-                    component={Link}
-                    href={group.href}
-                    sx={{
-                      borderRadius: "6px",
-                      px: 1,
-                      py: 0.5,
-                      minHeight: 30,
-                      backgroundColor: isActive ? "rgba(59,130,246,0.1)" : "transparent",
-                      "&:hover": { bgcolor: isActive ? "rgba(59,130,246,0.13)" : "rgba(255,255,255,0.04)" },
-                    }}
-                  >
-                    <ListItemIcon sx={{ minWidth: 26, color: isActive ? "primary.main" : "text.disabled" }}>
-                      {group.icon}
-                    </ListItemIcon>
-                    <ListItemText
-                      primary={group.label}
-                      primaryTypographyProps={{
-                        fontSize: "0.68rem",
-                        fontWeight: isActive ? 700 : 600,
-                        color: isActive ? "primary.main" : "text.secondary",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.07em",
-                      }}
-                    />
-                  </ListItemButton>
-                </Box>
-              );
-            }
-
             const isOpen = openGroups[group.id] !== false;
-            const hasActive = group.items.some((item) => isNavItemActive(item.href));
+            const hasActive = group.items.some((item) => item.href === pathname);
             return (
               <Box key={group.id} sx={{ mb: 0.25 }}>
-                {group.sectionLabel && (
-                  <>
-                    <Divider sx={{ my: 1 }} />
-                    <Typography variant="caption" sx={{ px: 1.5, py: 0.25, display: "block", color: "text.disabled", fontSize: "0.6rem", textTransform: "uppercase", letterSpacing: "0.1em" }}>
-                      {group.sectionLabel}
-                    </Typography>
-                  </>
-                )}
                 {/* Group header */}
                 <ListItemButton
                   onClick={() => toggleGroup(group.id)}
@@ -1439,8 +1309,8 @@ const AppShellInner = ({ children }: PropsWithChildren) => {
                 <Collapse in={isOpen} timeout="auto" unmountOnExit>
                   <List disablePadding sx={{ pl: 1 }}>
                     {group.items.map((item) => {
-                      const selected = isNavItemActive(item.href);
-                      const isProblems = item.href.startsWith("/metrics");
+                      const selected = pathname === item.href;
+                      const isMetrics = item.href === "/metrics";
                       return (
                         <ListItemButton
                           key={item.href}
@@ -1461,7 +1331,7 @@ const AppShellInner = ({ children }: PropsWithChildren) => {
                           }}
                         >
                           <ListItemIcon sx={{ minWidth: 30, color: selected ? "primary.main" : "text.secondary", transition: "color 0.15s ease" }}>
-                            {isProblems && problemCount > 0 ? (
+                            {isMetrics && problemCount > 0 ? (
                               <Badge
                                 badgeContent={problemCount > 99 ? "99+" : problemCount}
                                 color="error"
@@ -1487,156 +1357,195 @@ const AppShellInner = ({ children }: PropsWithChildren) => {
               </Box>
             );
           })}
+      </List>
 
-        <Divider sx={{ my: 0.75, mx: 1 }} />
-
-        {/* Notification Center nav item */}
-        <ListItemButton
-          onClick={openNotifCenter}
-          sx={{
-            borderRadius: "6px",
-            mb: 0.25,
-            pl: 1.5,
-            pr: 1,
-            py: 0.65,
-            borderLeft: "2px solid transparent",
-            "&:hover": { backgroundColor: "rgba(255,255,255,0.04)" },
-            transition: "all 0.15s ease",
-          }}
-        >
-          <ListItemIcon sx={{ minWidth: 30, color: unreadCenterCount > 0 ? "primary.main" : "text.secondary" }}>
+      {/* Notification center button */}
+      <Box sx={{ mx: 1.25, mb: 0.75 }}>
+        <Tooltip title="Notification Center" placement="right">
+          <Box
+            onClick={openNotifCenter}
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 1,
+              px: 1.5,
+              py: 0.875,
+              borderRadius: "8px",
+              cursor: "pointer",
+              transition: "background 0.15s",
+              "&:hover": { bgcolor: "rgba(255,255,255,0.04)" },
+            }}
+          >
             <Badge
               badgeContent={unreadCenterCount || null}
               color="error"
-              sx={{ "& .MuiBadge-badge": { fontSize: "0.5rem", height: 13, minWidth: 13, p: "0 2px" } }}
+              sx={{
+                "& .MuiBadge-badge": { fontSize: "0.55rem", height: 14, minWidth: 14, p: "0 3px" },
+              }}
             >
-              <InboxOutlinedIcon sx={{ fontSize: 18 }} />
+              <InboxOutlinedIcon
+                sx={{
+                  fontSize: 18,
+                  color: unreadCenterCount > 0 ? "primary.main" : "text.secondary",
+                }}
+              />
             </Badge>
-          </ListItemIcon>
-          <ListItemText
-            primary="Notification Center"
-            primaryTypographyProps={{ fontSize: "0.8rem", fontWeight: unreadCenterCount > 0 ? 600 : 400, color: unreadCenterCount > 0 ? "text.primary" : "text.secondary" }}
-          />
-          {unreadCenterCount > 0 && (
-            <Chip label={`${unreadCenterCount} new`} size="small" color="error" sx={{ height: 16, fontSize: "0.58rem" }} />
-          )}
-        </ListItemButton>
+            <Typography
+              sx={{
+                fontSize: "0.8125rem",
+                color: "text.secondary",
+                fontWeight: unreadCenterCount > 0 ? 600 : 400,
+              }}
+            >
+              Notification Center
+            </Typography>
+            {unreadCenterCount > 0 && (
+              <Chip
+                label={`${unreadCenterCount} new`}
+                size="small"
+                color="error"
+                sx={{ height: 16, fontSize: "0.58rem", ml: "auto" }}
+              />
+            )}
+          </Box>
+        </Tooltip>
+      </Box>
 
-        {/* Active problems nav item */}
-        <ListItemButton
-          component={Link}
-          href="/metrics"
+      {/* Alert controls */}
+      <Box
+        sx={{
+          mx: 1.25,
+          mb: 1,
+          px: 1.5,
+          py: 1,
+          borderRadius: 2,
+          border: "1px solid",
+          borderColor: problemCount > 0 ? "rgba(239,68,68,0.35)" : "divider",
+          bgcolor: problemCount > 0 ? "rgba(239,68,68,0.06)" : "transparent",
+          display: "flex",
+          alignItems: "center",
+          gap: 1,
+          transition: "all 0.3s",
+          cursor: problemCount > 0 ? "pointer" : "default",
+        }}
+        onClick={() => problemCount > 0 && router.push("/metrics")}
+      >
+        <Badge
+          badgeContent={problemCount || null}
+          color="error"
+          sx={{ "& .MuiBadge-badge": { fontSize: "0.6rem", height: 16, minWidth: 16 } }}
+        >
+          {problemCount > 0 ? (
+            <NotificationsActiveOutlinedIcon sx={{ fontSize: 17, color: "#EF4444" }} />
+          ) : (
+            <NotificationsNoneOutlinedIcon sx={{ fontSize: 17, color: "text.disabled" }} />
+          )}
+        </Badge>
+        <Typography
           sx={{
-            borderRadius: "6px",
-            mb: 0.25,
-            pl: 1.5,
-            pr: 1,
-            py: 0.65,
-            borderLeft: `2px solid ${problemCount > 0 ? "rgba(239,68,68,0.6)" : "transparent"}`,
-            backgroundColor: problemCount > 0 ? "rgba(239,68,68,0.06)" : "transparent",
-            "&:hover": { backgroundColor: problemCount > 0 ? "rgba(239,68,68,0.1)" : "rgba(255,255,255,0.04)" },
-            transition: "all 0.15s ease",
+            flex: 1,
+            fontSize: "0.72rem",
+            color: problemCount > 0 ? "#EF4444" : "text.disabled",
           }}
         >
-          <ListItemIcon sx={{ minWidth: 30, color: problemCount > 0 ? "#EF4444" : "text.disabled" }}>
-            <Badge
-              badgeContent={problemCount || null}
-              color="error"
-              sx={{ "& .MuiBadge-badge": { fontSize: "0.5rem", height: 13, minWidth: 13, p: "0 2px" } }}
-            >
-              {problemCount > 0
-                ? <NotificationsActiveOutlinedIcon sx={{ fontSize: 18 }} />
-                : <NotificationsNoneOutlinedIcon sx={{ fontSize: 18 }} />}
-            </Badge>
-          </ListItemIcon>
-          <ListItemText
-            primary={problemCount > 0 ? `${problemCount} active problem${problemCount !== 1 ? "s" : ""}` : "No active problems"}
-            primaryTypographyProps={{ fontSize: "0.8rem", fontWeight: problemCount > 0 ? 600 : 400, color: problemCount > 0 ? "#EF4444" : "text.disabled" }}
-          />
-          <Tooltip title="Notification sound">
-            <IconButton
-              size="small"
-              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setSoundMenuAnchor(e.currentTarget); }}
-              sx={{ p: 0.25, color: "text.secondary", "&:hover": { color: "text.primary" } }}
-            >
-              <MusicNoteOutlinedIcon sx={{ fontSize: 15 }} />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title={soundEnabled ? "Mute alerts" : "Unmute alerts"}>
-            <IconButton
-              size="small"
-              onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleSound(); }}
-              sx={{ p: 0.25, color: soundEnabled ? "text.secondary" : "text.disabled", "&:hover": { color: "text.primary" } }}
-            >
-              {soundEnabled ? <VolumeUpOutlinedIcon sx={{ fontSize: 15 }} /> : <VolumeMuteOutlinedIcon sx={{ fontSize: 15 }} />}
-            </IconButton>
-          </Tooltip>
-        </ListItemButton>
-
-      </List>
-
-      {/* Sound preset menu — Portal-rendered, position in JSX does not matter */}
-      <Menu
-        anchorEl={soundMenuAnchor}
-        open={Boolean(soundMenuAnchor)}
-        onClose={() => setSoundMenuAnchor(null)}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {Object.entries(SOUND_PRESETS).map(([key, preset]) => (
-          <MenuItem
-            key={key}
-            selected={key === soundPreset}
-            onClick={() => selectSoundPreset(key)}
-            sx={{ fontSize: "0.8rem", display: "flex", justifyContent: "space-between", gap: 2, pr: 0.5 }}
+          {problemCount > 0
+            ? `${problemCount} active problem${problemCount !== 1 ? "s" : ""}`
+            : "No problems"}
+        </Typography>
+        <Tooltip title="Notification sound">
+          <IconButton
+            size="small"
+            onClick={(e) => {
+              e.stopPropagation();
+              setSoundMenuAnchor(e.currentTarget);
+            }}
+            sx={{ p: 0.25, color: "text.secondary", "&:hover": { color: "text.primary" } }}
           >
-            {preset.label}
-            <IconButton
-              size="small"
-              onClick={(e) => { e.stopPropagation(); handlePreview(key); }}
-              sx={{ p: 0.25 }}
-            >
-              {previewingKey === key
-                ? <StopOutlinedIcon sx={{ fontSize: "0.95rem" }} />
-                : <PlayArrowOutlinedIcon sx={{ fontSize: "0.95rem" }} />}
-            </IconButton>
-          </MenuItem>
-        ))}
-        {customSounds.length > 0 && <Divider />}
-        {customSounds.map((s) => (
-          <MenuItem
-            key={s.id}
-            selected={s.id === soundPreset}
-            onClick={() => selectSoundPreset(s.id)}
-            sx={{ fontSize: "0.8rem", display: "flex", justifyContent: "space-between", gap: 1, pr: 0.5 }}
+            <MusicNoteOutlinedIcon sx={{ fontSize: 15 }} />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title={soundEnabled ? "Mute alerts" : "Unmute alerts"}>
+          <IconButton
+            size="small"
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleSound();
+            }}
+            sx={{
+              p: 0.25,
+              color: soundEnabled ? "text.secondary" : "text.disabled",
+              "&:hover": { color: "text.primary" },
+            }}
           >
-            <Typography noWrap sx={{ fontSize: "0.8rem", maxWidth: 130, flex: 1 }}>{s.name}</Typography>
-            <IconButton
-              size="small"
-              onClick={(e) => { e.stopPropagation(); handlePreview(s.id); }}
-              sx={{ p: 0.25 }}
-            >
-              {previewingKey === s.id
-                ? <StopOutlinedIcon sx={{ fontSize: "0.95rem" }} />
-                : <PlayArrowOutlinedIcon sx={{ fontSize: "0.95rem" }} />}
-            </IconButton>
-            <IconButton
-              size="small"
-              onClick={(e) => { e.stopPropagation(); handleDeleteCustomSound(s.id); }}
-              sx={{ p: 0.25, color: "text.disabled", "&:hover": { color: "error.main" } }}
-            >
-              <CloseIcon sx={{ fontSize: "0.85rem" }} />
-            </IconButton>
-          </MenuItem>
-        ))}
-        <Divider />
-        <MenuItem
-          onClick={() => customFileInputRef.current?.click()}
-          sx={{ fontSize: "0.8rem", gap: 1, color: "text.secondary" }}
+            {soundEnabled ? (
+              <VolumeUpOutlinedIcon sx={{ fontSize: 15 }} />
+            ) : (
+              <VolumeMuteOutlinedIcon sx={{ fontSize: 15 }} />
+            )}
+          </IconButton>
+        </Tooltip>
+        <Menu
+          anchorEl={soundMenuAnchor}
+          open={Boolean(soundMenuAnchor)}
+          onClose={() => setSoundMenuAnchor(null)}
+          onClick={(e) => e.stopPropagation()}
         >
-          <UploadFileOutlinedIcon sx={{ fontSize: "1rem" }} />
-          Upload sound…
-        </MenuItem>
-      </Menu>
+          {Object.entries(SOUND_PRESETS).map(([key, preset]) => (
+            <MenuItem
+              key={key}
+              selected={key === soundPreset}
+              onClick={() => selectSoundPreset(key)}
+              sx={{ fontSize: "0.8rem", display: "flex", justifyContent: "space-between", gap: 2, pr: 0.5 }}
+            >
+              {preset.label}
+              <IconButton
+                size="small"
+                onClick={(e) => { e.stopPropagation(); handlePreview(key); }}
+                sx={{ p: 0.25 }}
+              >
+                {previewingKey === key
+                  ? <StopOutlinedIcon sx={{ fontSize: "0.95rem" }} />
+                  : <PlayArrowOutlinedIcon sx={{ fontSize: "0.95rem" }} />}
+              </IconButton>
+            </MenuItem>
+          ))}
+          {customSounds.length > 0 && <Divider />}
+          {customSounds.map((s) => (
+            <MenuItem
+              key={s.id}
+              selected={s.id === soundPreset}
+              onClick={() => selectSoundPreset(s.id)}
+              sx={{ fontSize: "0.8rem", display: "flex", justifyContent: "space-between", gap: 1, pr: 0.5 }}
+            >
+              <Typography noWrap sx={{ fontSize: "0.8rem", maxWidth: 130, flex: 1 }}>{s.name}</Typography>
+              <IconButton
+                size="small"
+                onClick={(e) => { e.stopPropagation(); handlePreview(s.id); }}
+                sx={{ p: 0.25 }}
+              >
+                {previewingKey === s.id
+                  ? <StopOutlinedIcon sx={{ fontSize: "0.95rem" }} />
+                  : <PlayArrowOutlinedIcon sx={{ fontSize: "0.95rem" }} />}
+              </IconButton>
+              <IconButton
+                size="small"
+                onClick={(e) => { e.stopPropagation(); handleDeleteCustomSound(s.id); }}
+                sx={{ p: 0.25, color: "text.disabled", "&:hover": { color: "error.main" } }}
+              >
+                <CloseIcon sx={{ fontSize: "0.85rem" }} />
+              </IconButton>
+            </MenuItem>
+          ))}
+          <Divider />
+          <MenuItem
+            onClick={() => customFileInputRef.current?.click()}
+            sx={{ fontSize: "0.8rem", gap: 1, color: "text.secondary" }}
+          >
+            <UploadFileOutlinedIcon sx={{ fontSize: "1rem" }} />
+            Upload sound…
+          </MenuItem>
+        </Menu>
+      </Box>
 
       {/* Health status */}
       <Box sx={{ px: 2.5, py: 1.5, display: "flex", flexDirection: "column", gap: 0.75 }}>
@@ -1854,9 +1763,3 @@ const AppShellInner = ({ children }: PropsWithChildren) => {
     </Box>
   );
 };
-
-export const AppShell = ({ children }: PropsWithChildren) => (
-  <Suspense fallback={<Box sx={{ minHeight: "100vh" }} />}>
-    <AppShellInner>{children}</AppShellInner>
-  </Suspense>
-);

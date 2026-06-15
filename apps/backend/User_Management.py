@@ -186,34 +186,63 @@ def get_overview(team_id: int | None = None) -> list[dict]:
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            base = """
-                SELECT
-                    t.id,
-                    t.name,
-                    t.description,
-                    (
-                        SELECT COALESCE(
-                            json_agg(json_build_object(
-                                'id',       u.id,
-                                'username', u.username,
-                                'email',    u.email,
-                                'roles',    u.roles
-                            )), '[]'::json
-                        )
-                        FROM team_users u
-                        WHERE u.team_id = t.id
-                    ) AS users,
-                    (
-                        SELECT COALESCE(json_agg(ha.hostname), '[]'::json)
-                        FROM host_assignments ha
-                        WHERE ha.team_id = t.id
-                    ) AS hosts
-                FROM teams t
-            """
             if team_id is not None:
-                cur.execute(base + " WHERE t.id = %s ORDER BY t.name", (team_id,))
+                cur.execute(
+                    """
+                    WITH user_agg AS (
+                        SELECT team_id,
+                               json_agg(json_build_object(
+                                   'id', id, 'username', username,
+                                   'email', email, 'roles', roles
+                               )) AS users
+                        FROM team_users
+                        WHERE team_id = %s
+                        GROUP BY team_id
+                    ),
+                    host_agg AS (
+                        SELECT team_id, json_agg(hostname) AS hosts
+                        FROM host_assignments
+                        WHERE team_id = %s
+                        GROUP BY team_id
+                    )
+                    SELECT t.id, t.name, t.description,
+                           COALESCE(ua.users, '[]'::json) AS users,
+                           COALESCE(ha.hosts, '[]'::json) AS hosts
+                    FROM teams t
+                    LEFT JOIN user_agg ua ON ua.team_id = t.id
+                    LEFT JOIN host_agg  ha ON ha.team_id = t.id
+                    WHERE t.id = %s
+                    ORDER BY t.name
+                    """,
+                    (team_id, team_id, team_id),
+                )
             else:
-                cur.execute(base + " ORDER BY t.name")
+                cur.execute(
+                    """
+                    WITH user_agg AS (
+                        SELECT team_id,
+                               json_agg(json_build_object(
+                                   'id', id, 'username', username,
+                                   'email', email, 'roles', roles
+                               )) AS users
+                        FROM team_users
+                        WHERE team_id IS NOT NULL
+                        GROUP BY team_id
+                    ),
+                    host_agg AS (
+                        SELECT team_id, json_agg(hostname) AS hosts
+                        FROM host_assignments
+                        GROUP BY team_id
+                    )
+                    SELECT t.id, t.name, t.description,
+                           COALESCE(ua.users, '[]'::json) AS users,
+                           COALESCE(ha.hosts, '[]'::json) AS hosts
+                    FROM teams t
+                    LEFT JOIN user_agg ua ON ua.team_id = t.id
+                    LEFT JOIN host_agg  ha ON ha.team_id = t.id
+                    ORDER BY t.name
+                    """
+                )
             return [dict(r) for r in cur.fetchall()]
     except Exception as exc:
         logger.error("get_overview failed: %r", exc)
