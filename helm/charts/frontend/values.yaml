@@ -40,11 +40,11 @@ route:
 
 resources:
   requests:
-    cpu: 50m
-    memory: 64Mi
+    cpu: '1'
+    memory: 500Mi
   limits:
-    cpu: 200m
-    memory: 256Mi
+    cpu: '2'
+    memory: 1Gi
 
 autoscaling:
   enabled: false

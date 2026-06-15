@@ -33,11 +33,11 @@ service:
 
 resources:
   requests:
-    cpu: 200m
-    memory: 512Mi
-  limits:
-    cpu: 1000m
+    cpu: '4'
     memory: 1Gi
+  limits:
+    cpu: '6'
+    memory: 2Gi
 
 autoscaling:
   enabled: false
@@ -47,7 +47,8 @@ autoscaling:
   # targetMemoryUtilizationPercentage: 80
 
 livenessProbe:
-  tcpSocket:
+  httpGet:
+    path: /health
     port: 6769
   initialDelaySeconds: 15
   periodSeconds: 20
@@ -55,7 +56,8 @@ livenessProbe:
   failureThreshold: 3
 
 readinessProbe:
-  tcpSocket:
+  httpGet:
+    path: /health
     port: 6769
   initialDelaySeconds: 5
   periodSeconds: 10
@@ -73,11 +75,13 @@ existingConfigMap: ""  # pre-existing ConfigMap in OpenShift — Helm will not c
 
 # Secret values — pass via GitLab masked CI variables using --set at deploy time.
 # Never hardcode real values here.
-config: {}  # non-secret env vars injected via ConfigMap — add key: value pairs as needed
+config:
+  ALLOWED_ORIGINS: ""  # --set config.ALLOWED_ORIGINS=<comma-separated allowed origins, e.g. https://overwatch.example.com>
+  BACKEND_URL: ""      # --set config.BACKEND_URL=<internal backend URL seen by the frontend, e.g. http://backend-svc:6769>
 
 secret:
   zabbixUrl: ""       # --set secret.zabbixUrl=<your-zabbix-url>
   zabbixUser: ""      # --set secret.zabbixUser=<your-zabbix-username>
   zabbixPass: ""      # --set secret.zabbixPass=<your-zabbix-password>
-  secretKey: ""       # --set secret.secretKey=<your-jwt-secret-key>
-  databaseUrl: ""     # --set secret.databaseUrl=<your-database-url>
+  secretKey: ""       # --set secret.secretKey=<long-random-string — generate with: python -c "import secrets; print(secrets.token_hex(32))">
+  databaseUrl: ""     # --set secret.databaseUrl=<postgresql://user:pass@host:5432/dbname>

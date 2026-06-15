@@ -17,24 +17,24 @@ backend:
 
   securityContext: {}
 
-  ingress:
-    enabled: false
-
   resources:
     requests:
-      cpu: 100m
-      memory: 128Mi
+      cpu: '4'
+      memory: 1Gi
     limits:
-      cpu: 500m
-      memory: 512Mi
+      cpu: '6'
+      memory: 2Gi
 
-  # PROJECT-SPECIFIC: create this secret before deploying:
+  # PROJECT-SPECIFIC: create these before deploying:
   #   kubectl create secret generic backend-secret \
   #     --from-literal=ZABBIX_URL=http://... \
   #     --from-literal=ZABBIX_USER=Admin \
-  #     --from-literal=ZABBIX_PASS=... -n <namespace>
-  existingSecret: "backend-secret"      # pre-existing Secret with: ZABBIX_USER, ZABBIX_PASS, SECRET_KEY (and optionally ZABBIX_URL, DATABASE_URL)
-  existingConfigMap: "zabbix-portal-backend-config"   # pre-existing ConfigMap with: ZABBIX_URL, DATABASE_URL
+  #     --from-literal=ZABBIX_PASS=... \
+  #     --from-literal=SECRET_KEY=... \
+  #     --from-literal=DATABASE_URL=postgresql://user:pass@host:5432/db \
+  #     -n <namespace>
+  existingSecret: "backend-secret"      # pre-existing Secret with: ZABBIX_URL, ZABBIX_USER, ZABBIX_PASS, SECRET_KEY, DATABASE_URL
+  existingConfigMap: "zabbix-portal-backend-config"   # pre-existing ConfigMap with: ALLOWED_ORIGINS, BACKEND_URL
 
   env: {}
 
@@ -65,11 +65,11 @@ frontend:
 
   resources:
     requests:
-      cpu: 50m
-      memory: 64Mi
+      cpu: '1'
+      memory: 500Mi
     limits:
-      cpu: 200m
-      memory: 256Mi
+      cpu: '2'
+      memory: 1Gi
 
 # NOTE: PostgreSQL is NOT deployed by this chart. It runs as a shared/external
 # database; the backend reaches it via DATABASE_URL (set in backend-config /
